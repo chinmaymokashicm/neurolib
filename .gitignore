@@ -1,0 +1,16 @@
+# Virtual environments
+.env
+.venv
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# System files
+.DS_Store
+Thumbs.db

@@ -1,0 +1,24 @@
+[tool.poetry]
+name = "imagelib"
+version = "0.1.0"
+description = ""
+authors = ["Mokashi,Chinmay <CMokashi@mdanderson.org>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+pydantic = "^2.10.4"
+rich = "^13.9.4"
+pybids = "^0.18.1"
+nibabel = "^5.3.2"
+nilearn = "^0.11.0"
+matplotlib = "^3.10.0"
+pandas = "^2.2.3"
+ipython = "^8.31.0"
+ipykernel = "^6.29.5"
+ipywidgets = "^8.1.5"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

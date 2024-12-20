@@ -1,0 +1,27 @@
+#!/bin/bash
+
+# ==============================================================================
+# Install Python packages into the virtual environment
+venv_name=$1
+
+if [ -z "$venv_name" ]; then
+    echo "Error: Virtual environment name is required."
+    exit 1
+fi
+
+# Check if the virtual environment exists
+if [ ! -d "$venv_name" ]; then
+    echo "Error: Virtual environment $venv_name does not exist."
+    exit 1
+fi
+
+# Activate the virtual environment
+source "$venv_name/bin/activate"
+
+# Install required packages
+echo "Installing required packages in virtual environment $venv_name..."
+pip install pydantic rich pybids nibabel nilearn matplotlib pandas
+
+pip install ipython ipykernel ipywidgets
+
+pip freeze > requirements.txt
