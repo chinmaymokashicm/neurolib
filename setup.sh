@@ -3,7 +3,7 @@
 # ==============================================================================
 # Set up the Python environment
 python_version=3.12
-venv_name=imagelib
+venv_name=venv
 
 # Check if pyenv is installed
 if ! command -v pyenv &> /dev/null; then

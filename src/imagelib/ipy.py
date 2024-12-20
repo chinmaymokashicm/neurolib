@@ -1,4 +1,5 @@
 from pathlib import Path, PosixPath
+from typing import Optional
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -8,22 +9,29 @@ import nibabel as nib
 from bids import BIDSLayout
 from IPython.display import display, clear_output
 
-def explore_3D_array(arr: np.ndarray, cmap="gray", **kwargs):
+def explore_3D_array(arr: np.ndarray, mask: Optional[np.ndarray] = None, cmap="gray", alpha: int = 0.5, **kwargs):
     """
     Explore a 3D numpy array interactively.
     
     Args:
         arr: 3D numpy array
     """
+    mask_cmap: str = "jet"
     def fn(axis, slice_idx):
         plt.close("all")  # Close all existing figures
         plt.figure(figsize=(7, 7))
         if axis == 0:
             plt.imshow(arr[slice_idx, :, :], cmap=cmap, **kwargs)
+            if mask is not None:
+                plt.imshow(mask[slice_idx, :, :], cmap=mask_cmap, alpha=alpha)
         elif axis == 1:
             plt.imshow(arr[:, slice_idx, :], cmap=cmap, **kwargs)
+            if mask is not None:
+                plt.imshow(mask[:, slice_idx, :], cmap=mask_cmap, alpha=alpha)
         elif axis == 2:
             plt.imshow(arr[:, :, slice_idx], cmap=cmap, **kwargs)
+            if mask is not None:
+                plt.imshow(mask[:, :, slice_idx], cmap=mask_cmap, alpha=alpha)
         plt.colorbar()
         plt.title(f"Axis: {axis}, Slice: {slice_idx}")
         plt.axis("off")
@@ -35,22 +43,29 @@ def explore_3D_array(arr: np.ndarray, cmap="gray", **kwargs):
         slice_idx=(0, arr.shape[0] - 1)
     )
 
-def explore_4D_array(arr: np.ndarray, cmap="gray", **kwargs):
+def explore_4D_array(arr: np.ndarray, mask: np.ndarray = None, cmap="gray", alpha: int = 0.5, **kwargs):
     """
     Explore a 4D numpy array interactively.
     
     Args:
         arr: 4D numpy array
     """
+    mask_cmap: str = "jet"
     def fn(axis, slice_idx, time_idx):
         plt.close("all")  # Close all existing figures
         plt.figure(figsize=(7, 7))
         if axis == 0:
             plt.imshow(arr[slice_idx, :, :, time_idx], cmap=cmap, **kwargs)
+            if mask is not None:
+                plt.imshow(mask[slice_idx, :, :, time_idx], cmap=mask_cmap, alpha=alpha)
         elif axis == 1:
             plt.imshow(arr[:, slice_idx, :, time_idx], cmap=cmap, **kwargs)
+            if mask is not None:
+                plt.imshow(mask[:, slice_idx, :, time_idx], cmap=mask_cmap, alpha=alpha)
         elif axis == 2:
             plt.imshow(arr[:, :, slice_idx, time_idx], cmap=cmap, **kwargs)
+            if mask is not None:
+                plt.imshow(mask[:, :, slice_idx, time_idx], cmap=mask_cmap, alpha=alpha)
         plt.colorbar()
         plt.title(f"Axis: {axis}, Slice: {slice_idx}, Time: {time_idx}")
         plt.axis("off")
@@ -63,7 +78,7 @@ def explore_4D_array(arr: np.ndarray, cmap="gray", **kwargs):
         time_idx=(0, arr.shape[3] - 1)
     )
 
-def explore_image(img: str | PosixPath | nib.Nifti1Image, cmap="gray", **kwargs):
+def explore_image(img: str | PosixPath | nib.Nifti1Image, mask: Optional[str | PosixPath | nib.Nifti1Image] = None, cmap="gray", **kwargs):
     """
     Explore a 3D or 4D NIfTI image interactively.
     
@@ -74,12 +89,19 @@ def explore_image(img: str | PosixPath | nib.Nifti1Image, cmap="gray", **kwargs)
         img = nib.load(img)
 
     data = img.get_fdata()
+    
+    mask_data = None
+    if mask is not None:
+        if isinstance(mask, str | PosixPath):
+            mask = nib.load(mask)
+        mask_data = mask.get_fdata()
+    
     if data.ndim == 3:
         print("Exploring 3D data...")
-        explore_3D_array(data, cmap=cmap, **kwargs)
+        explore_3D_array(data, mask_data, cmap=cmap, **kwargs)
     elif data.ndim == 4:
         print("Exploring 4D data...")
-        explore_4D_array(data, cmap=cmap, **kwargs)
+        explore_4D_array(data, mask_data, cmap=cmap, **kwargs)
     else:
         raise ValueError("Only 3D and 4D data are supported.")
     
