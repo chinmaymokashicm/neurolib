@@ -1,149 +1,90 @@
-import ipywidgets as widgets
-import nibabel as nib
-import numpy as np
-import matplotlib.pyplot as plt
-from bids import BIDSLayout
-from ipywidgets import interact, Output
-from IPython.display import display
+"""
+Convert DICOM dataset to BIDS dataset. The organization of the DICOM dataset is variable.
+Use of the tool dcm2bids as the package for the conversion.
 
-def explore_3D_array(arr: np.ndarray, output_widget: Output, cmap="gray", **kwargs):
+Steps of conversion-
+0. Installation of dcm2bids and dcm2niix
+1. Create a scaffolding of the BIDS dataset
+2. Migrate the DICOM dataset to sourcedata/ subdirectory (per subject and session)
+3. Use dcm2bids_helper to create example sidecar json files
+3. Build the configuration file for dcm2bids - use from sidecar json files
+4. Run dcm2bids with each session of the DICOM dataset having a unique participant ID and session ID
+"""
+
+import shutil, subprocess, json
+from pathlib import Path, PosixPath
+from typing import Optional
+
+from pydantic import BaseModel
+from rich.progress import track
+
+class ParticipantMapping(BaseModel):
     """
-    Explore a 3D numpy array interactively.
-    
-    Args:
-        arr: 3D numpy array
-        output_widget: Output widget to control rendering.
+    Map existing subject ID and session ID to BIDS participant ID and session ID.
     """
-    def fn(axis, slice_idx):
-        with output_widget:
-            output_widget.clear_output(wait=True)  # Clear previous content
-            plt.figure(figsize=(7, 7))
-            if axis == 0:
-                plt.imshow(arr[slice_idx, :, :], cmap=cmap, **kwargs)
-            elif axis == 1:
-                plt.imshow(arr[:, slice_idx, :], cmap=cmap, **kwargs)
-            elif axis == 2:
-                plt.imshow(arr[:, :, slice_idx], cmap=cmap, **kwargs)
-            plt.colorbar()
-            plt.title(f"Axis: {axis}, Slice: {slice_idx}")
-            plt.axis("off")
-            plt.show()
+    subject_id: str
+    session_id: str
+    participant_id: str
+    session_participant_id: str
+    dicom_subdir: str
 
-    interact(
-        fn,
-        axis=(0, 2),
-        slice_idx=(0, arr.shape[0] - 1)
-    )
-
-def explore_4D_array(arr: np.ndarray, output_widget: Output, cmap="gray", **kwargs):
-    """
-    Explore a 4D numpy array interactively.
+def read_dicom2bids_mapping(mapping_file: PosixPath) -> list[ParticipantMapping]:
+    mappings: list[ParticipantMapping] = []
+    with open(mapping_file, "r") as f:
+        mapping = json.load(f)
     
-    Args:
-        arr: 4D numpy array
-        output_widget: Output widget to control rendering.
-    """
-    def fn(axis, slice_idx, time_idx):
-        with output_widget:
-            output_widget.clear_output(wait=True)  # Clear previous content
-            plt.figure(figsize=(7, 7))
-            if axis == 0:
-                plt.imshow(arr[slice_idx, :, :, time_idx], cmap=cmap, **kwargs)
-            elif axis == 1:
-                plt.imshow(arr[:, slice_idx, :, time_idx], cmap=cmap, **kwargs)
-            elif axis == 2:
-                plt.imshow(arr[:, :, slice_idx, time_idx], cmap=cmap, **kwargs)
-            plt.colorbar()
-            plt.title(f"Axis: {axis}, Slice: {slice_idx}, Time: {time_idx}")
-            plt.axis("off")
-            plt.show()
-
-    interact(
-        fn,
-        axis=(0, 2),
-        slice_idx=(0, arr.shape[0] - 1),
-        time_idx=(0, arr.shape[3] - 1)
-    )
-
-def explore_image(img: str | nib.Nifti1Image, output_widget: Output, cmap="gray", **kwargs):
-    """
-    Explore a 3D or 4D NIfTI image interactively.
+    for subject_id, sessions in mapping.items():
+        for session_id, participant_info in sessions.items():
+            participant_id: str = participant_info["participant_id"]
+            participant_session_id: str = participant_info["session_id"]
+            mappings.append(
+                ParticipantMapping(
+                    subject_id=subject_id,
+                    session_id=session_id,
+                    participant_id=participant_id,
+                    session_participant_id=participant_session_id,
+                    dicom_subdir=participant_info["dicom_subdir"]
+                )
+            )
     
-    Args:
-        img: Path to the image file or a Nifti1Image object.
-        output_widget: Output widget to control rendering.
-    """
-    if isinstance(img, str):
-        img = nib.load(img)
-
-    data = img.get_fdata()
-    output_widget.clear_output(wait=True)  # Clear previous output immediately
-    if data.ndim == 3:
-        explore_3D_array(data, output_widget, cmap=cmap, **kwargs)
-    elif data.ndim == 4:
-        explore_4D_array(data, output_widget, cmap=cmap, **kwargs)
-    else:
-        raise ValueError("Only 3D and 4D data are supported.")
-
-def explore_bids_directory(bids_dir):
-    layout = BIDSLayout(bids_dir)
+    return mappings
     
-    # Widgets
-    subject_dropdown = widgets.Dropdown(description="Subject:")
-    session_dropdown = widgets.Dropdown(description="Session:")
-    image_dropdown = widgets.Dropdown(description="Image File:")
-    output_widget = Output()  # Widget to manage plots
+class DICOMToBIDSConvertor(BaseModel):
+    bids_root: PosixPath
+    dicom_root: PosixPath
+    participant_mappings: list[ParticipantMapping]
     
-    # Update session options based on subject
-    def update_sessions(subject):
-        sessions = layout.get_sessions(subject=subject)
-        session_dropdown.options = sessions
-        if sessions:
-            session_dropdown.value = sessions[0]
-    
-    # Update image file options based on subject and session
-    def update_images(subject, session):
-        images = layout.get(subject=subject, session=session, suffix="bold")
-        img_files = [img.path for img in images if img.path.endswith('.nii.gz')]
-        image_dropdown.options = img_files
-        if img_files:
-            image_dropdown.value = img_files[0]
+    def create_bids_scaffolding(self):
+        """
+        Create the scaffolding of the BIDS dataset.
+        """
+        # Create directory if not exists
+        if not self.bids_root.exists():
+            self.bids_root.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["dcm2bids_scaffold", "-o", str(self.bids_root)], check=True)
+        
+    def migrate_dicom_data(self, symlink: bool = True, sample: bool = True):
+        # Migrate a small subset if sample is True
+        if sample:
+            self.participant_mappings = self.participant_mappings[:2]
+        
+        for participant_mapping in track(self.participant_mappings):
+            # Create participant and session directories
+            participant_dir = self.bids_root / "sourcedata" / participant_mapping.participant_id
+            session_dir = participant_dir / participant_mapping.session_participant_id
+            if not participant_dir.exists():
+                participant_dir.mkdir(parents=True, exist_ok=True)
+            if not session_dir.exists():
+                session_dir.mkdir(parents=True, exist_ok=True)
 
-    # Handle subject selection
-    def on_subject_change(change):
-        subject = change.new
-        update_sessions(subject)
-        update_images(subject, session_dropdown.value)
-
-    # Handle session selection
-    def on_session_change(change):
-        session = change.new
-        update_images(subject_dropdown.value, session)
-
-    # Handle image selection and display
-    def on_image_change(change):
-        file_path = change.new
-        if file_path:
-            with output_widget:
-                print(f"Displaying image: {file_path}")
-                explore_image(file_path, output_widget)
-
-    # Attach event listeners
-    subject_dropdown.observe(on_subject_change, names="value")
-    session_dropdown.observe(on_session_change, names="value")
-    image_dropdown.observe(on_image_change, names="value")
-    
-    # Initialize
-    subjects = layout.get_subjects()
-    subject_dropdown.options = subjects
-    if subjects:
-        subject_dropdown.value = subjects[0]
-
-    update_sessions(subject_dropdown.value)
-    update_images(subject_dropdown.value, session_dropdown.value)
-    
-    # Display widgets
-    display(subject_dropdown, session_dropdown, image_dropdown, output_widget)
-
-# Example usage:
-# explore_bids_directory('/path/to/bids/dataset')
+            # Migrate DICOM data to sourcedata/ subdirectory
+            dicom_dir = self.dicom_root / participant_mapping.dicom_subdir
+            shutil.copytree(dicom_dir, session_dir, dirs_exist_ok=True, symlinks=symlink)
+            
+    def run_dcm2bids_helper(self, subject_id: str, session_id: str, output_dir: PosixPath) -> None:
+        """
+        Run dcm2bids_helper to create example sidecar json files.
+        """
+        participant_mapping = next((mapping for mapping in self.participant_mappings if mapping.subject_id == subject_id and mapping.session_id == session_id), None)
+        dicom_subdir_full_path: PosixPath = self.dicom_root / participant_mapping.dicom_subdir
+        subprocess.run(["dcm2bids_helper", "-d", str(dicom_subdir_full_path), "-o", str(output_dir)], check=True)

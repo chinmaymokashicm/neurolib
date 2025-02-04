@@ -22,7 +22,7 @@ class AtlasParcellation(BaseModel):
         mask = nib.load(self.mask_path) if self.mask_path is not None else None
         
         # Resample mask and scan to match atlas
-        resampled_brain = resample_to_img(brain, atlas)
+        resampled_brain = resample_to_img(brain, atlas, force_resample=True)
         resampled_mask = None
         if mask is not None:
             resampled_mask = resample_to_img(mask, atlas)
