@@ -5,15 +5,15 @@ Use of the tool dcm2bids as the package for the conversion.
 Steps of conversion-
 0. Installation of dcm2bids and dcm2niix
 1. Create a scaffolding of the BIDS dataset
+2. Create a 1:1 mapping of existing subject ID and session ID to BIDS participant ID and session ID (to be done by the user - not here)
 2. Migrate the DICOM dataset to sourcedata/ subdirectory (per subject and session)
-3. Use dcm2bids_helper to create example sidecar json files
-3. Build the configuration file for dcm2bids - use from sidecar json files
+3. Use dcm2bids_helper to create example sidecar json files (optional)
+3. Build the configuration file for dcm2bids - use from sidecar json files (non-programmatically)
 4. Run dcm2bids with each session of the DICOM dataset having a unique participant ID and session ID
 """
 
 import shutil, subprocess, json
 from pathlib import Path, PosixPath
-from typing import Optional
 
 from pydantic import BaseModel
 from rich.progress import track
@@ -61,12 +61,12 @@ class DICOMToBIDSConvertor(BaseModel):
         # Create directory if not exists
         if not self.bids_root.exists():
             self.bids_root.mkdir(parents=True, exist_ok=True)
-        subprocess.run(["dcm2bids_scaffold", "-o", str(self.bids_root)], check=True)
+        subprocess.run(["dcm2bids_scaffold", "-o", str(self.bids_root)], check=False)
         
     def migrate_dicom_data(self, symlink: bool = True, sample: bool = True):
         # Migrate a small subset if sample is True
         if sample:
-            self.participant_mappings = self.participant_mappings[:2]
+            self.participant_mappings = self.participant_mappings[:8]
         
         for participant_mapping in track(self.participant_mappings):
             # Create participant and session directories
@@ -81,7 +81,7 @@ class DICOMToBIDSConvertor(BaseModel):
             dicom_dir = self.dicom_root / participant_mapping.dicom_subdir
             shutil.copytree(dicom_dir, session_dir, dirs_exist_ok=True, symlinks=symlink)
             
-    def run_dcm2bids_helper(self, subject_id: str, session_id: str, output_dir: PosixPath) -> None:
+    def run_dcm2bids_helper(self, subject_id: str, session_id: str, output_dir: PosixPath = Path("tmp/")) -> None:
         """
         Run dcm2bids_helper to create example sidecar json files.
         """
