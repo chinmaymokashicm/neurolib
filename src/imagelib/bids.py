@@ -12,6 +12,8 @@ Steps of conversion-
 4. Run dcm2bids with each session of the DICOM dataset having a unique participant ID and session ID
 """
 
+from .helpers.file import copy_as_symlinks
+
 import shutil, subprocess, json
 from pathlib import Path, PosixPath
 
@@ -80,7 +82,11 @@ class DICOMToBIDSConvertor(BaseModel):
 
             # Migrate DICOM data to sourcedata/ subdirectory
             dicom_dir = self.dicom_root / participant_mapping.dicom_subdir
-            shutil.copytree(dicom_dir, session_dir, dirs_exist_ok=True, symlinks=symlink)
+            # shutil.copytree(dicom_dir, session_dir, dirs_exist_ok=True, symlinks=symlink)
+            if symlink:
+                copy_as_symlinks(dicom_dir, session_dir)
+            else:
+                shutil.copytree(dicom_dir, session_dir, dirs_exist_ok=True)
             
     def run_dcm2bids_helper(self, subject_id: str, session_id: str, output_dir: PosixPath = Path("tmp/")) -> None:
         """
