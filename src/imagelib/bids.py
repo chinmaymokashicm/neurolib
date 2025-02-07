@@ -15,7 +15,7 @@ Steps of conversion-
 import shutil, subprocess, json
 from pathlib import Path, PosixPath
 
-from pydantic import BaseModel
+from pydantic import BaseModel, FilePath, DirectoryPath
 from rich.progress import track
 
 class ParticipantMapping(BaseModel):
@@ -50,9 +50,10 @@ def read_dicom2bids_mapping(mapping_file: PosixPath) -> list[ParticipantMapping]
     return mappings
     
 class DICOMToBIDSConvertor(BaseModel):
-    bids_root: PosixPath
-    dicom_root: PosixPath
+    bids_root: DirectoryPath
+    dicom_root: DirectoryPath
     participant_mappings: list[ParticipantMapping]
+    config: FilePath
     
     def create_bids_scaffolding(self):
         """
@@ -88,3 +89,17 @@ class DICOMToBIDSConvertor(BaseModel):
         participant_mapping = next((mapping for mapping in self.participant_mappings if mapping.subject_id == subject_id and mapping.session_id == session_id), None)
         dicom_subdir_full_path: PosixPath = self.dicom_root / participant_mapping.dicom_subdir
         subprocess.run(["dcm2bids_helper", "-d", str(dicom_subdir_full_path), "-o", str(output_dir)], check=True)
+
+    def convert2bids_per_participant(self, participant_id: str) -> None:
+        """
+        Convert DICOM data to BIDS format for a single participant.
+        """
+        dicom_subdir: PosixPath = self.bids_root / "sourcedata" / participant_id
+        subprocess.run(["dcm2bids", "-d", str(dicom_subdir), "-p", participant_id, "-c", str(self.config)], check=True)
+        
+    def convert2bids(self) -> None:
+        """
+        Convert DICOM data to BIDS format for all participants.
+        """
+        for participant_mapping in track(self.participant_mappings):
+            self.convert2bids_per_participant(participant_mapping.participant_id)
