@@ -20,36 +20,20 @@ from pathlib import Path, PosixPath
 from pydantic import BaseModel, FilePath, DirectoryPath
 from rich.progress import track
 
-class ParticipantMapping(BaseModel):
+class SessionInfo(BaseModel):
     """
-    Map existing subject ID and session ID to BIDS participant ID and session ID.
+    Session information for a participant.
     """
-    subject_id: str
     session_id: str
-    participant_id: str
-    session_participant_id: str
     dicom_subdir: str
 
-def read_dicom2bids_mapping(mapping_file: PosixPath) -> list[ParticipantMapping]:
-    mappings: list[ParticipantMapping] = []
-    with open(mapping_file, "r") as f:
-        mapping = json.load(f)
-    
-    for subject_id, sessions in mapping.items():
-        for session_id, participant_info in sessions.items():
-            participant_id: str = participant_info["participant_id"]
-            participant_session_id: str = participant_info["session_id"]
-            mappings.append(
-                ParticipantMapping(
-                    subject_id=subject_id,
-                    session_id=session_id,
-                    participant_id=participant_id,
-                    session_participant_id=participant_session_id,
-                    dicom_subdir=participant_info["dicom_subdir"]
-                )
-            )
-    
-    return mappings
+class ParticipantMapping(BaseModel):
+    """
+    Map existing subject ID BIDS participant ID.
+    """
+    subject_id: str
+    participant_id: str
+    session_info: list[SessionInfo]
     
 class DICOMToBIDSConvertor(BaseModel):
     bids_root: DirectoryPath
@@ -69,24 +53,25 @@ class DICOMToBIDSConvertor(BaseModel):
     def migrate_dicom_data(self, symlink: bool = True, sample: bool = True):
         # Migrate a small subset if sample is True
         if sample:
-            self.participant_mappings = self.participant_mappings[:8]
+            self.participant_mappings = self.participant_mappings[:2]
         
-        for participant_mapping in track(self.participant_mappings):
+        for participant_mapping in self.participant_mappings:
             # Create participant and session directories
             participant_dir = self.bids_root / "sourcedata" / participant_mapping.subject_id
-            session_dir = participant_dir / participant_mapping.session_id
             if not participant_dir.exists():
                 participant_dir.mkdir(parents=True, exist_ok=True)
-            if not session_dir.exists():
-                session_dir.mkdir(parents=True, exist_ok=True)
-
-            # Migrate DICOM data to sourcedata/ subdirectory
-            dicom_dir = self.dicom_root / participant_mapping.dicom_subdir
-            # shutil.copytree(dicom_dir, session_dir, dirs_exist_ok=True, symlinks=symlink)
-            if symlink:
-                copy_as_symlinks(dicom_dir, session_dir)
-            else:
-                shutil.copytree(dicom_dir, session_dir, dirs_exist_ok=True)
+            
+            for session_info in track(participant_mapping.session_info, description=f"Participant {participant_mapping.participant_id}"):
+                session_dir = participant_dir / session_info.session_id
+                if not session_dir.exists():
+                    session_dir.mkdir(parents=True, exist_ok=True)
+                
+                # Migrate DICOM data to sourcedata/ subdirectory
+                dicom_dir = self.dicom_root / session_info.dicom_subdir
+                if symlink:
+                    copy_as_symlinks(dicom_dir, session_dir)
+                else:
+                    shutil.copytree(dicom_dir, session_dir, dirs_exist_ok=True)
             
     def run_dcm2bids_helper(self, subject_id: str, session_id: str, output_dir: PosixPath = Path("tmp/")) -> None:
         """
@@ -101,8 +86,7 @@ class DICOMToBIDSConvertor(BaseModel):
         Convert DICOM data to BIDS format for a single participant.
         """
         mapping = next((mapping for mapping in self.participant_mappings if mapping.participant_id == participant_id), None)
-        subject_id: str = mapping.subject_id
-        dicom_subdir: PosixPath = self.bids_root / "sourcedata" / subject_id
+        dicom_subdir: PosixPath = self.bids_root / "sourcedata" / mapping.subject_id
         subprocess.run(["dcm2bids", "-d", str(dicom_subdir), "-p", participant_id, "-c", str(self.config), "-o", str(self.bids_root), "--auto_extract_entities"], check=True)
         
     def convert2bids(self) -> None:
