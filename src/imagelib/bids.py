@@ -73,8 +73,8 @@ class DICOMToBIDSConvertor(BaseModel):
         
         for participant_mapping in track(self.participant_mappings):
             # Create participant and session directories
-            participant_dir = self.bids_root / "sourcedata" / participant_mapping.participant_id
-            session_dir = participant_dir / participant_mapping.session_participant_id
+            participant_dir = self.bids_root / "sourcedata" / participant_mapping.subject_id
+            session_dir = participant_dir / participant_mapping.session_id
             if not participant_dir.exists():
                 participant_dir.mkdir(parents=True, exist_ok=True)
             if not session_dir.exists():
@@ -100,8 +100,10 @@ class DICOMToBIDSConvertor(BaseModel):
         """
         Convert DICOM data to BIDS format for a single participant.
         """
-        dicom_subdir: PosixPath = self.bids_root / "sourcedata" / participant_id
-        subprocess.run(["dcm2bids", "-d", str(dicom_subdir), "-p", participant_id, "-c", str(self.config)], check=True)
+        mapping = next((mapping for mapping in self.participant_mappings if mapping.participant_id == participant_id), None)
+        subject_id: str = mapping.subject_id
+        dicom_subdir: PosixPath = self.bids_root / "sourcedata" / subject_id
+        subprocess.run(["dcm2bids", "-d", str(dicom_subdir), "-p", participant_id, "-c", str(self.config), "-o", str(self.bids_root), "--auto_extract_entities"], check=True)
         
     def convert2bids(self) -> None:
         """
