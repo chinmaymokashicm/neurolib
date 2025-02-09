@@ -64,7 +64,10 @@ def compute_region_metrics_patients(layout: BIDSLayout, atlas_path: str | PosixP
     for scan_file, lesion_mask_file in track(file_pairs, description="Computing region-wise metrics"):
         atlas = AtlasParcellation(atlas_path=atlas_path, brain_scan_path=scan_file, mask_path=lesion_mask_file)
         subject: str = layout.parse_file_entities(scan_file)["subject"]
-        session: str = layout.parse_file_entities(scan_file)["session"]
+        try:
+            session: str = layout.parse_file_entities(scan_file)["session"]
+        except KeyError:
+            session = None
         metrics: list[dict] = atlas.compute_region_metrics()
         for metric_idx in range(len(metrics)):
             metrics[metric_idx]["subject"] = subject
