@@ -2,30 +2,34 @@
 Work with custom brain atlases and compute parcel/region-wise metrics.
 """
 from pathlib import Path, PosixPath
-from typing import Optional, Tuple, Dict
+from typing import Optional, Tuple, Dict, Callable
+import warnings
 
 import numpy as np
 import pandas as pd
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import nibabel as nib
 from nilearn.image import resample_to_img
 
 class AtlasParcellation(BaseModel):
-    atlas_path: PosixPath
-    brain_scan_path: PosixPath
-    mask_path: Optional[PosixPath] = None
-    label_map_path: Optional[PosixPath] = None
+    atlas_path: PosixPath = Field(..., description="Path to the brain atlas file")
+    brain_scan_path: PosixPath = Field(..., description="Path to the brain scan file")
+    mask_path: Optional[PosixPath] = Field(None, description="Path to the lesion mask file")
+    label_map_path: Optional[PosixPath] = Field(None, description="Path to the label map file")
     
     def load_data(self) -> Tuple[np.array, np.array, np.array]:
         atlas = nib.load(self.atlas_path)
         brain = nib.load(self.brain_scan_path)
         mask = nib.load(self.mask_path) if self.mask_path is not None else None
         
-        # Resample mask and scan to match atlas
-        resampled_brain = resample_to_img(brain, atlas, force_resample=True)
-        resampled_mask = None
-        if mask is not None:
-            resampled_mask = resample_to_img(mask, atlas)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=UserWarning)
+            
+            # Resample mask and scan to match atlas
+            resampled_brain = resample_to_img(brain, atlas, force_resample=True, copy_header=True, interpolation="nearest")
+            resampled_mask = None
+            if mask is not None:
+                resampled_mask = resample_to_img(mask, atlas, force_resample=True, copy_header=True, interpolation="nearest")
         
         atlas_data = atlas.get_fdata()
         brain_data = resampled_brain.get_fdata()
@@ -56,12 +60,12 @@ class AtlasParcellation(BaseModel):
 
         return label_dict
     
-    def compute_region_metrics(self) -> pd.DataFrame:
+    def compute_region_metrics(self) -> list[dict]:
         """
         Compute region-wise metrics based on the atlas, brain scan, and optional lesion mask.
-        
+
         Returns:
-            A DataFrame with computed metrics for each region.
+            A list of dictionaries containing region-wise metrics.
         """
         atlas_data, brain_data, mask_data = self.load_data()
         region_labels: dict = self.load_labels()
@@ -70,7 +74,7 @@ class AtlasParcellation(BaseModel):
         unique_regions = np.unique(atlas_data)
         unique_regions = unique_regions[unique_regions > 0]
 
-        metrics = {}
+        metrics = []
 
         for region in unique_regions:
             # Create mask for the current region
@@ -91,13 +95,14 @@ class AtlasParcellation(BaseModel):
 
             # Store metrics
             region_name = region_labels.get(int(region), f"Region {int(region)}")
-            metrics[region_name] = {
-                "Region Volume (voxels)": region_volume,
-                "Lesion Volume (voxels)": lesion_volume,
-                "Lesion Burden": lesion_burden,
-                "Mean Intensity": mean_intensity,
-            }
+            metrics.append(
+                {
+                    "Region Name": region_name,
+                    "Region Volume (voxels)": region_volume,
+                    "Lesion Volume (voxels)": lesion_volume,
+                    "Lesion Burden": lesion_burden,
+                    "Mean Intensity": mean_intensity,
+                }
+            )
 
-        # Convert metrics to a DataFrame
-        metrics_df = pd.DataFrame.from_dict(metrics, orient="index")
-        return metrics_df
+        return metrics
