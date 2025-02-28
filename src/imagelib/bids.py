@@ -1,7 +1,7 @@
 """
 Work with BIDS data.
 """
-from .dicom import convert_participant_mappings2table, ParticipantInfo
+from .dicom import Participants
 
 from typing import Optional
 from pathlib import Path, PosixPath
@@ -66,11 +66,11 @@ class SelectBIDSFileInfo(BaseModel):
         return table
     
     @classmethod
-    def merge_with_participants_info(cls, layout: BIDSLayout, participant_info: list[ParticipantInfo]) -> pd.DataFrame:
+    def merge_with_participants_info(cls, layout: BIDSLayout, participants: Participants) -> pd.DataFrame:
         """
         Merge the selected BIDS file information with the participants information.
         """
-        df_participants: pd.DataFrame = pd.DataFrame(convert_participant_mappings2table(participant_info))
+        df_participants: pd.DataFrame = participants.to_table(to_df=True)
         df_bids_info: pd.DataFrame = cls.from_BIDSLayout(layout, to_df=True)
         df_mapped: pd.DataFrame = pd.merge(
             df_participants, 
