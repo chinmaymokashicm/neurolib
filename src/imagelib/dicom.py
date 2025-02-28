@@ -139,7 +139,8 @@ def load_dicom_structured_sessions(dicom_root: PosixPath, sample: Optional[int] 
     """
     participant_mappings: list[Participant] = []
     
-    subject_ids: list[str] = sorted([subdir.name for subdir in dicom_root.iterdir() if subdir.is_dir()])
+    session_ids: list[str] = sorted([subdir.name for subdir in dicom_root.iterdir() if subdir.is_dir()])
+    subject_ids: list[str] = sorted(set(["-".join(session_id.split("-")[:2]) for session_id in session_ids]))    
     
     end: int = sample if sample else len(subject_ids)
     for participant_id, subject_id in enumerate(subject_ids[:end], start=1):
