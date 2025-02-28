@@ -25,7 +25,7 @@ from rich.progress import track
 class DICOMToBIDSConvertor(BaseModel):
     bids_root: DirectoryPath
     dicom_root: DirectoryPath
-    participants: list[Participant]
+    participants: Participants
     config: FilePath
     
     @field_validator("bids_root", mode="before")
@@ -45,16 +45,15 @@ class DICOMToBIDSConvertor(BaseModel):
         
     def migrate_dicom_data(self, symlink: bool = True, sample: bool = True):
         # Migrate a small subset if sample is True
-        if sample:
-            self.participants = self.participants[:2]
+        end: int = 2 if sample else len(self.participants.participants)
         
-        for participant_mapping in self.participants:
+        for participant in self.participants.participants[:end]:
             # Create participant and session directories
-            participant_dir = self.bids_root / "sourcedata" / participant_mapping.subject_id
+            participant_dir = self.bids_root / "sourcedata" / participant.subject_id
             if not participant_dir.exists():
                 participant_dir.mkdir(parents=True, exist_ok=True)
             
-            for session_info in track(participant_mapping.sessions, description=f"Participant {participant_mapping.participant_id}"):
+            for session_info in track(participant.sessions, description=f"Participant {participant.participant_id}"):
                 session_dir = participant_dir / session_info.session_id
                 if not session_dir.exists():
                     session_dir.mkdir(parents=True, exist_ok=True)
@@ -65,6 +64,20 @@ class DICOMToBIDSConvertor(BaseModel):
                     copy_as_symlinks(dicom_dir, session_dir)
                 else:
                     shutil.copytree(dicom_dir, session_dir, dirs_exist_ok=True)
+                    
+    def migrate_dicom_per_session(self, participant_id: str, session_id: str, symlink: bool = True):
+        """
+        Migrate DICOM data to BIDS sourcedata/ subdirectory for a single session.
+        """
+        participant: Participant = self.participants.filter(participant_ids=[participant_id], bids_session_ids=[session_id]).participants[0]
+        participant_dir = self.bids_root / "sourcedata" / participant.subject_id
+        session_info = participant.sessions[0]
+        session_dir = participant_dir / session_info.session_id
+        dicom_dir = self.dicom_root / session_info.dicom_subdir
+        if symlink:
+            copy_as_symlinks(dicom_dir, session_dir)
+        else:
+            shutil.copytree(dicom_dir, session_dir, dirs_exist_ok=True)
             
     def run_dcm2bids_helper(self, subject_id: str, session_id: str, output_dir: PosixPath = Path("tmp/")) -> None:
         """
