@@ -20,7 +20,7 @@ source "$venv_name/bin/activate"
 
 # Install required packages
 echo "Installing required packages in virtual environment $venv_name..."
-pip install pydantic rich pybids nibabel nilearn matplotlib pandas
+pip install pydantic rich pybids nibabel pydicom nilearn matplotlib pandas
 
 pip install ipython ipykernel ipywidgets
 

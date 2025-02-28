@@ -13,33 +13,26 @@ Steps of conversion-
 """
 
 from .helpers.file import copy_as_symlinks
+from .dicom import ParticipantInfo
 
-import shutil, subprocess, json
+import shutil, subprocess
 from pathlib import Path, PosixPath
+import multiprocessing
 
-from pydantic import BaseModel, FilePath, DirectoryPath
+from pydantic import BaseModel, FilePath, DirectoryPath, field_validator
 from rich.progress import track
-
-class SessionInfo(BaseModel):
-    """
-    Session information for a participant.
-    """
-    session_id: str
-    dicom_subdir: str
-
-class ParticipantMapping(BaseModel):
-    """
-    Map existing subject ID BIDS participant ID.
-    """
-    subject_id: str
-    participant_id: str
-    session_info: list[SessionInfo]
     
 class DICOMToBIDSConvertor(BaseModel):
     bids_root: DirectoryPath
     dicom_root: DirectoryPath
-    participant_mappings: list[ParticipantMapping]
+    participant_info: list[ParticipantInfo]
     config: FilePath
+    
+    @field_validator("bids_root", mode="before")
+    def create_bids_root(cls, value):
+        if not value.exists():
+            value.mkdir(parents=True, exist_ok=True)
+        return value
     
     def create_bids_scaffolding(self):
         """
@@ -53,9 +46,9 @@ class DICOMToBIDSConvertor(BaseModel):
     def migrate_dicom_data(self, symlink: bool = True, sample: bool = True):
         # Migrate a small subset if sample is True
         if sample:
-            self.participant_mappings = self.participant_mappings[:2]
+            self.participant_info = self.participant_info[:2]
         
-        for participant_mapping in self.participant_mappings:
+        for participant_mapping in self.participant_info:
             # Create participant and session directories
             participant_dir = self.bids_root / "sourcedata" / participant_mapping.subject_id
             if not participant_dir.exists():
@@ -77,21 +70,21 @@ class DICOMToBIDSConvertor(BaseModel):
         """
         Run dcm2bids_helper to create example sidecar json files.
         """
-        participant_mapping = next((mapping for mapping in self.participant_mappings if mapping.subject_id == subject_id and mapping.session_id == session_id), None)
+        participant_mapping = next((mapping for mapping in self.participant_info if mapping.subject_id == subject_id and mapping.session_id == session_id), None)
         dicom_subdir_full_path: PosixPath = self.dicom_root / participant_mapping.dicom_subdir
         subprocess.run(["dcm2bids_helper", "-d", str(dicom_subdir_full_path), "-o", str(output_dir)], check=True)
 
-    def convert2bids_per_participant(self, participant_id: str) -> None:
+    def convert2bids_per_participant(self, participant_id: str, bids_session_id: str) -> None:
         """
         Convert DICOM data to BIDS format for a single participant.
         """
-        mapping = next((mapping for mapping in self.participant_mappings if mapping.participant_id == participant_id), None)
+        mapping = next((mapping for mapping in self.participant_info if mapping.participant_id == participant_id), None)
         dicom_subdir: PosixPath = self.bids_root / "sourcedata" / mapping.subject_id
-        subprocess.run(["dcm2bids", "-d", str(dicom_subdir), "-p", participant_id, "-c", str(self.config), "-o", str(self.bids_root), "--auto_extract_entities"], check=True)
+        subprocess.run(["dcm2bids", "-d", str(dicom_subdir), "-p", participant_id, "-s", bids_session_id, "-c", str(self.config), "-o", str(self.bids_root), "--auto_extract_entities"], check=True)
         
     def convert2bids(self) -> None:
         """
         Convert DICOM data to BIDS format for all participants.
         """
-        for participant_mapping in track(self.participant_mappings):
-            self.convert2bids_per_participant(participant_mapping.participant_id)
+        with multiprocessing.Pool() as pool:
+            pool.starmap(self.convert2bids_per_participant, [(participant_mapping.participant_id, session_info.bids_session_id) for participant_mapping in self.participant_info for session_info in participant_mapping.session_info])
