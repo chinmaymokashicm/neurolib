@@ -87,17 +87,20 @@ class DICOMToBIDSConvertor(BaseModel):
         dicom_subdir_full_path: PosixPath = self.dicom_root / participant_mapping.dicom_subdir
         subprocess.run(["dcm2bids_helper", "-d", str(dicom_subdir_full_path), "-o", str(output_dir)], check=True)
 
+    def get_dcm2bids_cmd_per_participant(self, participant_id: str, bids_session_id: str) -> list[str]:
+        """
+        Get the dcm2bids command for a single participant.
+        """
+        participant: Participant = self.participants.filter(participant_ids=[participant_id], bids_session_ids=[bids_session_id]).participants[0]
+        dicom_subdir: str = participant.sessions[0].dicom_subdir
+        cmd: list[str] = ["dcm2bids", "-d", dicom_subdir, "-p", participant_id, "-s", bids_session_id, "-c", str(self.config), "-o", str(self.bids_root), "--auto_extract_entities"]
+        return cmd
+    
     def convert2bids_per_participant(self, participant_id: str, bids_session_id: str) -> None:
         """
         Convert DICOM data to BIDS format for a single participant.
         """
-        # mapping = next((mapping for mapping in self.participant_info if mapping.participant_id == participant_id), None)
-        # dicom_subdir: PosixPath = self.bids_root / "sourcedata" / mapping.subject_id / 
-        # subprocess.run(["dcm2bids", "-d", str(dicom_subdir), "-p", participant_id, "-s", bids_session_id, "-c", str(self.config), "-o", str(self.bids_root), "--auto_extract_entities"], check=True)
-        
-        participant: Participant = self.participants.filter(participant_ids=[participant_id], bids_session_ids=[bids_session_id]).participants[0]
-        dicom_subdir: str = participant.sessions[0].dicom_subdir
-        subprocess.run(["dcm2bids", "-d", dicom_subdir, "-p", participant_id, "-s", bids_session_id, "-c", str(self.config), "-o", str(self.bids_root), "--auto_extract_entities"], check=True)
+        subprocess.run(self.get_dcm2bids_cmd_per_participant(participant_id, bids_session_id), check=True)
         
     def convert2bids(self) -> None:
         """
