@@ -129,29 +129,29 @@ class Participants(BaseModel):
         return rows
     
     @classmethod
-    def from_table(cls, table: list[dict]) -> "Participants":
+    def from_table(cls, df: pd.DataFrame) -> "Participants":
         """
         Create a Participants object from a list of dictionaries.
         """
-        participants = []
-        for participant in table:
-            sessions = participant.get("sessions", [])
-            session_objs = []
-            for session in sessions:
-                scans = session.get("scans", [])
-                scan_objs = [Scan(**scan) for scan in scans]
-                session_objs.append(Session(
-                    session_id=session["session_id"],
-                    bids_session_id=session["bids_session_id"],
-                    dicom_subdir=session["dicom_subdir"],
-                    scans=scan_objs
-                ))
-            participants.append(Participant(
-                subject_id=participant["subject_id"],
-                participant_id=participant["participant_id"],
-                sessions=session_objs
-            ))
-        return Participants(participants=participants)
+        participant_ids: list[str] = df["participant_id"].unique().tolist()
+        participants_dict: list[Participant] = []
+        for participant_id in participant_ids:
+            subject_id: str = df[df["participant_id"] == participant_id]["subject_id"].iloc[0]
+            participant_dict: dict = {"participant_id": int(participant_id), "subject_id": subject_id, "sessions": []}
+            bids_session_ids: list[str] = df[df["participant_id"] == participant_id]["bids_session_id"].unique().tolist()
+            for bids_session_id in bids_session_ids:
+                session_id, dicom_subdir = df[(df["participant_id"] == participant_id) & (df["bids_session_id"] == bids_session_id)][["session_id", "dicom_subdir"]].iloc[0]
+                scan_names: list[str] = df[(df["participant_id"] == participant_id) & (df["bids_session_id"] == bids_session_id)]["scan_name"].unique().tolist()
+                session_dict: dict = {"session_id": session_id, "dicom_subdir": dicom_subdir, "scans": []}
+                for scan_name in scan_names:
+                    scan_type, scan_date, series_number, acquisition_time, scan_subdir = df[(df["participant_id"] == participant_id) & (df["bids_session_id"] == bids_session_id) & (df["scan_name"] == scan_name)][["scan_type", "scan_date", "series_number", "acquisition_time", "scan_subdir"]].iloc[0]
+                    scan_dict: dict = {"scan_name": scan_name, "scan_type": scan_type, "scan_date": scan_date, "series_number": series_number, "acquisition_time": acquisition_time, "scan_subdir": scan_subdir}
+                    session_dict["scans"].append(Scan(**scan_dict))
+                participant_dict["sessions"].append(Session(**session_dict))
+            participants_dict.append(Participant(**participant_dict))
+            
+        participants: Participants = cls(participants=participants_dict)
+        participants
 
 # ============================DICOM Loaders============================
 
