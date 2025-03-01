@@ -151,7 +151,7 @@ class Participants(BaseModel):
             participants_dict.append(Participant(**participant_dict))
             
         participants: Participants = cls(participants=participants_dict)
-        participants
+        return participants
 
 # ============================DICOM Loaders============================
 
