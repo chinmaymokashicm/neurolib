@@ -127,6 +127,31 @@ class Participants(BaseModel):
         if to_df:
             return pd.DataFrame(rows)
         return rows
+    
+    @classmethod
+    def from_table(cls, table: list[dict]) -> "Participants":
+        """
+        Create a Participants object from a list of dictionaries.
+        """
+        participants = []
+        for participant in table:
+            sessions = participant.get("sessions", [])
+            session_objs = []
+            for session in sessions:
+                scans = session.get("scans", [])
+                scan_objs = [Scan(**scan) for scan in scans]
+                session_objs.append(Session(
+                    session_id=session["session_id"],
+                    bids_session_id=session["bids_session_id"],
+                    dicom_subdir=session["dicom_subdir"],
+                    scans=scan_objs
+                ))
+            participants.append(Participant(
+                subject_id=participant["subject_id"],
+                participant_id=participant["participant_id"],
+                sessions=session_objs
+            ))
+        return Participants(participants=participants)
 
 # ============================DICOM Loaders============================
 
