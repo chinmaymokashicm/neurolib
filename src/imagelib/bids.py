@@ -66,12 +66,16 @@ class SelectBIDSFileInfo(BaseModel):
         return table
     
     @classmethod
-    def merge_with_participants_info(cls, layout: BIDSLayout, participants: Participants) -> pd.DataFrame:
+    def merge_with_participants_info(cls, df_or_layout: pd.DataFrame | BIDSLayout, participants: Participants) -> pd.DataFrame:
         """
         Merge the selected BIDS file information with the participants information.
         """
         df_participants: pd.DataFrame = participants.to_table(to_df=True)
-        df_bids_info: pd.DataFrame = cls.from_BIDSLayout(layout, to_df=True)
+        if isinstance(df_or_layout, pd.DataFrame):
+            df_bids_info: pd.DataFrame = df_or_layout
+        else:
+            layout: BIDSLayout = df_or_layout
+            df_bids_info: pd.DataFrame = cls.from_BIDSLayout(layout, to_df=True)
         df_mapped: pd.DataFrame = pd.merge(
             df_participants, 
             df_bids_info, 
