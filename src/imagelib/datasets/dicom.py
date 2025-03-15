@@ -1,7 +1,7 @@
 """
 Load DICOM data and create mappings on participant level.
 """
-from .helpers.data import flatten_no_compound_key
+from ..helpers.data import flatten_no_compound_key
 
 from pathlib import Path, PosixPath
 from typing import Optional, Iterable, Iterator
@@ -16,9 +16,11 @@ class Scan(BaseModel):
     """
     Information about a scan.
     """
-    scan_name: str
+    series_description: str
     scan_type: Optional[str] = None
     scan_date: Optional[str] = None
+    series_name: Optional[str] = None
+    series_description: Optional[str] = None
     series_number: Optional[str] = None
     acquisition_time: Optional[str] = None
     scan_subdir: str
@@ -66,7 +68,7 @@ class Participant(BaseModel):
         for sessions in self.sessions:
             output += f"  {sessions.session_id}\n"
             for scan_info in sessions.scans:
-                output += f"    {scan_info.scan_name}\n"
+                output += f"    {scan_info.series_description}\n"
         return output
     
 class Participants(BaseModel):
@@ -92,6 +94,8 @@ class Participants(BaseModel):
         """
         Create a Participants object from a list of dictionaries.
         """
+        # Convert all columns to strings
+        df = df.astype(str)
         participant_ids: list[str] = df["participant_id"].unique().tolist()
         participants_dict: list[Participant] = []
         for participant_id in participant_ids:
@@ -100,11 +104,11 @@ class Participants(BaseModel):
             bids_session_ids: list[str] = df[df["participant_id"] == participant_id]["bids_session_id"].unique().tolist()
             for bids_session_id in bids_session_ids:
                 session_id, dicom_subdir, bids_session_id = df[(df["participant_id"] == participant_id) & (df["bids_session_id"] == bids_session_id)][["session_id", "dicom_subdir", "bids_session_id"]].iloc[0]
-                scan_names: list[str] = df[(df["participant_id"] == participant_id) & (df["bids_session_id"] == bids_session_id)]["scan_name"].unique().tolist()
+                series_descriptions: list[str] = df[(df["participant_id"] == participant_id) & (df["bids_session_id"] == bids_session_id)]["series_description"].unique().tolist()
                 session_dict: dict = {"session_id": session_id, "dicom_subdir": dicom_subdir, "bids_session_id": bids_session_id, "scans": []}
-                for scan_name in scan_names:
-                    scan_type, scan_date, series_number, acquisition_time, scan_subdir = df[(df["participant_id"] == participant_id) & (df["bids_session_id"] == bids_session_id) & (df["scan_name"] == scan_name)][["scan_type", "scan_date", "series_number", "acquisition_time", "scan_subdir"]].iloc[0]
-                    scan_dict: dict = {"scan_name": scan_name, "scan_type": scan_type, "scan_date": scan_date, "series_number": series_number, "acquisition_time": acquisition_time, "scan_subdir": scan_subdir}
+                for series_description in series_descriptions:
+                    scan_type, scan_date, series_number, acquisition_time, scan_subdir, series_name = df[(df["participant_id"] == participant_id) & (df["bids_session_id"] == bids_session_id) & (df["series_description"] == series_description)][["scan_type", "scan_date", "series_number", "acquisition_time", "scan_subdir", "series_name"]].iloc[0]
+                    scan_dict: dict = {"series_description": series_description, "scan_type": scan_type, "scan_date": scan_date, "series_number": series_number, "acquisition_time": acquisition_time, "scan_subdir": scan_subdir, "series_name": series_name}
                     session_dict["scans"].append(Scan(**scan_dict))
                 participant_dict["sessions"].append(Session(**session_dict))
             participants_dict.append(Participant(**participant_dict))
@@ -143,7 +147,8 @@ class Participants(BaseModel):
                         "session_id": session.session_id,
                         "bids_session_id": session.bids_session_id,
                         "dicom_subdir": session.dicom_subdir,
-                        "scan_name": scan.scan_name,
+                        "series_name": scan.series_name,
+                        "series_description": scan.series_description,
                         "scan_type": scan.scan_type,
                         "scan_date": scan.scan_date,
                         "series_number": scan.series_number,
@@ -160,12 +165,56 @@ class Participants(BaseModel):
 
 # ============================DICOM Loaders============================
 
+def determine_scan_info(scan_dir: PosixPath) -> Optional[Scan]:
+    if not scan_dir.is_dir():
+        raise ValueError(f"{scan_dir} is not a directory")
+    dicom_file: PosixPath = next(scan_dir.glob("*.dcm"), None)
+    if not dicom_file:
+        print(f"No DICOM files found in {scan_dir}")
+        return None
+    
+    scan_date = dicom.dcmread(dicom_file).StudyDate
+    if not scan_date:
+        scan_date = dicom.dcmread(dicom_file).AcquisitionDate
+    if not scan_date:
+        print(f"No date found for {dicom_file}")
+    series_description: str = dicom.dcmread(dicom_file).SeriesDescription
+    series_number = dicom.dcmread(dicom_file).SeriesNumber
+    acquisition_time = dicom.dcmread(dicom_file).AcquisitionTime.split(".")[0]
+
+    # Determine scan type based on SeriesDescription, MRAcquisitionType, and DiffusionBValue
+    if any(keyword in series_description.lower() for keyword in ["t1", "mprage", "t2", "flair"]):
+        scan_type = "anat"
+    elif any(keyword in series_description.lower() for keyword in ["dwi", "dti"]) or "DiffusionBValue" in dicom.dcmread(dicom_file):
+        scan_type = "dwi"
+    elif any(keyword in series_description.lower() for keyword in ["bold", "task", "rest"]):
+        scan_type = "func"
+    else:
+        scan_type = "unexpected"
+
+    return Scan(
+        series_description=series_description,
+        scan_type=scan_type,
+        scan_date=scan_date,
+        series_name=scan_dir.name,
+        series_number=series_number,
+        acquisition_time=acquisition_time,
+        scan_subdir=str(scan_dir)
+        )
+        
+    
+
 def load_dicom_structured_sessions(dicom_root: PosixPath, sample: Optional[int] = None) -> Participants:
     """
     DICOM Loader if the DICOM dataset has the following features-
-    1. The directory structure is organized by subject ID, session ID, and scans.
+    1. The directory structure is organized by session ID and scans.
     2. Scan subdirectories contain DICOM files.
-    3. Subdirectory names are used as subject IDs and session IDs.
+    
+    Example tree-
+    <root>
+    ├── <session_id_1>
+    │   ├── <scan_1>
+    │   │   ├── <dicom_files>
     """
     participant_mappings: list[Participant] = []
     
@@ -177,48 +226,83 @@ def load_dicom_structured_sessions(dicom_root: PosixPath, sample: Optional[int] 
         print(f"Loading participant {participant_id} ({subject_id})")
         session_subdirs: list[PosixPath] = sorted([subdir for subdir in dicom_root.iterdir() if subdir.is_dir() and subdir.name.startswith(subject_id)])
         session_info: list[Session] = []
+        for bids_session_id, session_dir in enumerate(session_subdirs, start=1):
+            if not session_dir.is_dir():
+                continue
+            session_id: str = session_dir.name
+            # dicom_subdir: str = session.name
+            scans: list[Scan] = []
+            for scan_dir in session_dir.iterdir():
+                if not scan_dir.is_dir():
+                    continue
+                try:
+                    scan: Optional[Scan] = determine_scan_info(scan_dir)
+                except AttributeError as e:
+                    print(e)
+                    continue
+                if scan:
+                    scans.append(scan)
+                
+            session_info.append(Session(
+                session_id=session_id,
+                bids_session_id=bids_session_id,
+                dicom_subdir=str(session_dir),
+                scans=scans
+                ))
+            
+        participant_mappings.append(
+            Participant(
+                subject_id=subject_id,
+                participant_id=participant_id,
+                sessions=session_info,
+            )
+        )
+        
+    return Participants(participants=participant_mappings)
+
+def load_dicom_structured_subjects(dicom_root: PosixPath, sample: Optional[int] = None) -> Participants:
+    """
+    DICOM Loader if the DICOM dataset has the following features-
+    1. The directory structure is organized by subject ID, session ID, and scans.
+    2. Scan subdirectories contain DICOM files.
+    3. Subdirectory names are used as subject IDs and session IDs.
+    
+    Example tree-
+    <root>
+    ├── <subject_id_1>
+    │   ├── <session_id_1>
+    │   │   ├── <scan_1>
+    │   │   │   ├── <dicom_files>
+    """
+    participant_mappings: list[Participant] = []
+    subject_ids: list[str] = sorted([subdir.name for subdir in dicom_root.iterdir() if subdir.is_dir()])
+    
+    end: int = sample if sample else len(subject_ids)
+    
+    for participant_id, subject_id in enumerate(subject_ids[:end], start=1):
+        print(f"Loading participant {participant_id} ({subject_id})")
+        session_subdirs: list[PosixPath] = sorted([subdir for subdir in (dicom_root / subject_id).iterdir() if subdir.is_dir()])
+        session_info: list[Session] = []
         for bids_session_id, session in enumerate(session_subdirs, start=1):
             if not session.is_dir():
                 continue
             session_id: str = session.name
             # dicom_subdir: str = session.name
             scans: list[Scan] = []
-            for scan in session.iterdir():
-                if not scan.is_dir():
+            for scan_dir in session.iterdir():
+                if not scan_dir.is_dir():
                     continue
                 
                 # Load scan date from first DICOM file within the scan directory, skip if directory is empty
-                first_dicom_file: PosixPath = next(scan.glob("*.dcm"), None)
-                if first_dicom_file:
-                    scan_date = dicom.dcmread(first_dicom_file).StudyDate
-                    if not scan_date:
-                        scan_date = dicom.dcmread(first_dicom_file).AcquisitionDate
-                    if not scan_date:
-                        print(f"No date found for {first_dicom_file}")
-                    scan_name: str = dicom.dcmread(first_dicom_file).SeriesDescription
-                    series_number = dicom.dcmread(first_dicom_file).SeriesNumber
-                    acquisition_time = dicom.dcmread(first_dicom_file).AcquisitionTime.split(".")[0]
-                    
-                    # Determine scan type based on SeriesDescription, MRAcquisitionType, and DiffusionBValue
-                    if any(keyword in scan_name.lower() for keyword in ["t1", "mprage", "t2"]):
-                        scan_type = "anat"
-                    elif any(keyword in scan_name.lower() for keyword in ["dwi", "dti"]) or "DiffusionBValue" in dicom.dcmread(first_dicom_file):
-                        scan_type = "dwi"
-                    elif any(keyword in scan_name.lower() for keyword in ["bold", "task", "rest"]):
-                        scan_type = "func"
-                    else:
-                        scan_type = "unexpected"
+                try:
+                    scan: Optional[Scan] = determine_scan_info(scan_dir)
+                except AttributeError as e:
+                    print(f"Error loading {scan_dir}: {e}")
+                    continue
+                if scan:
+                    scans.append(scan)
                 else:
-                    print(f"No DICOM files found in {scan}")
-                    
-                scans.append(Scan(
-                    scan_name=scan_name, 
-                    scan_type=scan_type, 
-                    scan_date=scan_date, 
-                    series_number=series_number,
-                    acquisition_time=acquisition_time,
-                    scan_subdir=str(scan)
-                    ))
+                    print(f"No DICOM files found in {scan_dir}")
                 
             session_info.append(Session(
                 session_id=session_id,

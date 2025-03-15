@@ -22,6 +22,7 @@ class SelectBIDSFileInfo(BaseModel):
     participant_id: Optional[str]
     session_id: Optional[str]
     run: Optional[str]
+    series_description: Optional[str]
     series_number: Optional[str]
     acquisition_time: Optional[str]
     
@@ -38,7 +39,8 @@ class SelectBIDSFileInfo(BaseModel):
         datatype: str = entities.get("datatype", None)
         participant_id: str = entities.get("subject", None)
         session_id: str = entities.get("session", None)
-        run: str = entities.get("run", None)
+        run: str = entities.get("run", "0")
+        series_description: str = entities.get("SeriesDescription", None)
         series_number: str = entities.get("SeriesNumber", None)
         acquisition_time: str = entities.get("AcquisitionTime", None)
         # Convert acquisition time to a more readable format - HHMMSS
@@ -50,6 +52,7 @@ class SelectBIDSFileInfo(BaseModel):
             participant_id=participant_id,
             session_id=session_id,
             run=run,
+            series_description=series_description,
             series_number=series_number,
             acquisition_time=acquisition_time,
         )
@@ -79,11 +82,11 @@ class SelectBIDSFileInfo(BaseModel):
         df_mapped: pd.DataFrame = pd.merge(
             df_participants, 
             df_bids_info, 
-            how="inner", 
-            left_on=["participant_id", "bids_session_id", "series_number", "acquisition_time"], 
-            right_on=["participant_id", "session_id", "series_number", "acquisition_time"]
+            how="outer", 
+            left_on=["participant_id", "bids_session_id", "series_description", "series_number", "acquisition_time"], 
+            right_on=["participant_id", "session_id", "series_description", "series_number", "acquisition_time"]
         )
-        df_mapped = df_mapped[["participant_id", "session_id_x", "bids_session_id", "scan_date", "scan_type", "run", "series_number", "acquisition_time", "filename", "scan_name"]].reset_index(drop=True)
+        df_mapped = df_mapped[["participant_id", "session_id_x", "bids_session_id", "scan_date", "scan_type", "run", "series_description", "series_number", "acquisition_time", "filename", "scan_name"]].reset_index(drop=True)
         df_mapped.rename(columns={"session_id_x": "session_id", "filename": "bids_filename"}, inplace=True)
         df_mapped.head()
         return df_mapped
