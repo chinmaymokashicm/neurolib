@@ -19,6 +19,7 @@ ipykernel = "^6.29.5"
 ipywidgets = "^8.1.5"
 antspyx = "^0.5.4"
 antspynet = "^0.2.9"
+wheel = "^0.45.1"
 
 
 [build-system]
