@@ -5,19 +5,19 @@
 python_version=3.12
 venv_name=venv
 
-# Check if pyenv is installed
-if ! command -v pyenv &> /dev/null; then
-    echo "pyenv is not installed. Please install it first."
-    exit 1
-fi
+# # Check if pyenv is installed
+# if ! command -v pyenv &> /dev/null; then
+#     echo "pyenv is not installed. Please install it first."
+#     exit 1
+# fi
 
 # Set the Python version for the current shell session
-if ! pyenv versions | grep -q "$python_version"; then
-    echo "Python $python_version is not installed. Installing now..."
-    pyenv install "$python_version" -s
-fi
-pyenv shell "$python_version"
-echo "Using Python version: $(python --version)"
+# if ! pyenv versions | grep -q "$python_version"; then
+#     echo "Python $python_version is not installed. Installing now..."
+#     pyenv install "$python_version" -s
+# fi
+# pyenv shell "$python_version"
+# echo "Using Python version: $(python --version)"
 
 # Create the virtual environment using venv
 if [ -d "$venv_name" ]; then
