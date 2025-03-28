@@ -167,7 +167,7 @@ class NiftiData(BaseModel):
                 if value not in aggregated_data[field]:
                     aggregated_data[field][value] = 0
                 aggregated_data[field][value] += 1
-                print(f"Field {field}: {value}")
+                # print(f"Field {field}: {value}")
         return {field: dict(sorted(values.items(), key=lambda item: item[1], reverse=True)) for field, values in aggregated_data.items()}
 
 class DICOMToBIDSConvertor(BaseModel):
@@ -257,19 +257,30 @@ class DICOMToBIDSConvertor(BaseModel):
         dicom_subdir_full_path: PosixPath = self.dicom_root / dicom_subdir
         subprocess.run(["dcm2bids_helper", "-d", str(dicom_subdir_full_path), "-o", str(output_dir)], check=True)
 
-    def generate_cmds(self, nifti2bids: bool = False) -> None:
+    def generate_cmds(self, nifti2bids: bool = False, auto_extract_entities: bool = True) -> None:
         """
         Generate dcm2bids commands for all participants. If nifti2bids is True, skip dcm2niix conversion.
         """
         if not self.config:
             raise ValueError("Configuration file not provided")
-        for participant in self.participants.participants:
-            for session_info in participant.sessions:
-                dicom_subdir: str = session_info.dicom_subdir
-                cmd: list[str] = ["dcm2bids", "-d", dicom_subdir, "-p", participant.participant_id, "-s", session_info.bids_session_id, "-c", str(self.config), "-o", str(self.bids_root), "--auto_extract_entities"]
-                if nifti2bids:
-                    cmd.append("--skip_dcm2niix")
-                self.cmds.append(cmd)
+        if nifti2bids:
+            # Skip dcm2niix conversion. 
+            # Instead of reading from the DICOM directory, read from the NIFTI directory (bids_root/sourcedata)
+            for participant in self.participants.participants:
+                for session_info in participant.sessions:
+                    nifti_dir: PosixPath = self.bids_root / "sourcedata" / participant.subject_id / session_info.session_id
+                    cmd: list[str] = ["dcm2bids", "-d", str(nifti_dir), "-p", participant.participant_id, "-s", session_info.bids_session_id, "-c", str(self.config), "-o", str(self.bids_root), "--skip_dcm2niix"]
+                    if auto_extract_entities:
+                        cmd.append("--auto_extract_entities")
+                    self.cmds.append(cmd)
+        else:
+            for participant in self.participants.participants:
+                for session_info in participant.sessions:
+                    dicom_subdir: str = session_info.dicom_subdir
+                    cmd: list[str] = ["dcm2bids", "-d", dicom_subdir, "-p", participant.participant_id, "-s", session_info.bids_session_id, "-c", str(self.config), "-o", str(self.bids_root)]
+                    if auto_extract_entities:
+                        cmd.append("--auto_extract_entities")
+                    self.cmds.append(cmd)
                 
     def save_cmds(self, output_file: str | PosixPath) -> None:
         """

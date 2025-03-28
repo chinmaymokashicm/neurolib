@@ -20,11 +20,11 @@ source "$venv_name/bin/activate"
 
 # Install required packages
 echo "Installing required packages in virtual environment $venv_name..."
-pip install pydantic rich pybids nibabel pydicom nilearn matplotlib pandas
-pip install antspyx antspynet
+pip install pydantic rich pybids nibabel pydicom nilearn matplotlib pandas numpy
+pip install antspyx antspynet scikit-image trimesh pyvista
+pip install trame[all] # Install for pyvista visualization
 
 pip install ipython ipykernel ipywidgets
-
 
 # Install the latest release of pycortex from pip
 # pip install setuptools wheel numpy cython

@@ -36,3 +36,8 @@ echo "Virtual environment $venv_name activated."
 echo "Installing required packages..."
 bash install_requirements.sh "$venv_name"
 echo "Required packages installed."
+
+poetry add $(cat requirements.txt) # Only for this project
+
+# Set environment variables - only for this project
+export IMAGELIB_HOME=$PWD

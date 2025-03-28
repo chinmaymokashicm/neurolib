@@ -2,7 +2,9 @@
 Unitary processes for preprocessing pipelines. 
 """
 from ..pipeline import get_new_pipeline_derived_filename
-from .helper import save_sidecar
+from .constants import *
+from .base import BIDSProcessSummarySidecar, BIDSProcessResults
+from ...helpers.data import clean_dict_from_numpy
 
 from pathlib import Path, PosixPath
 from typing import Optional
@@ -11,120 +13,136 @@ import ants
 from antspynet.utilities import brain_extraction
 from bids import BIDSLayout
 
-def n4_bias_field_correction(input_filepath: str | PosixPath, layout: BIDSLayout, pipeline_name: str, overwrite: bool = False) -> Optional[None]:
+@BIDSProcessSummarySidecar.execute_process
+def registration_to_mni(input_filepath: str | PosixPath, layout: BIDSLayout, pipeline_name: str, mni_template_path: str, overwrite: bool = False) -> Optional[BIDSProcessResults]:
+    """
+    Execute image registration to MNI space.
+    
+    Args:
+        input_filepath (str | PosixPath): Input NIfTI file path.
+        layout (BIDSLayout): BIDSLayout object.
+        pipeline_name (str): Name of the pipeline.
+        mni_template_path (str): Path to the MNI template.
+        overwrite (bool, optional): Overwrite existing files. Defaults to False.
+        
+    Returns:
+        Optional[BIDSProcessResults]: Results of the process. If output file already exists, returns None.
+    """
+    input_filepath: str = str(input_filepath)
+    if not input_filepath.endswith((".nii.gz", ".nii")):
+        raise ValueError(f"Expected a NIfTI file, got {input_filepath}")
+    suffix: str = "T1w"
+    mni_warped_path: str = get_new_pipeline_derived_filename(input_filepath, layout, pipeline_name, BIDS_DESC_ENTITY_MNI152, ".nii.gz", suffix=suffix)
+    if not overwrite and Path(mni_warped_path).exists():
+        print(f"File {mni_warped_path} already exists. Skipping.")
+        return None
+    input_nii: ants.ANTsImage = ants.image_read(input_filepath)
+    mni_template: ants.ANTsImage = ants.image_read(mni_template_path)
+    
+    # Resample the input image to the MNI template
+    input_nii: ants.ANTsImage = ants.resample_image_to_target(input_nii, mni_template)
+    
+    mni_transformation = ants.registration(
+        fixed=mni_template,
+        moving=input_nii,
+        type_of_transform="SyN"
+    )
+    mni_warped: ants.ANTsImage = ants.apply_transforms(
+        fixed=mni_template,
+        moving=input_nii,
+        transformlist=mni_transformation["fwdtransforms"]
+    )
+    Path(mni_warped_path).parent.mkdir(parents=True, exist_ok=True)
+    mni_warped.to_filename(mni_warped_path)
+    
+    return BIDSProcessResults(
+        input={"path": input_filepath, "resolution": input_nii.shape},
+        output={"path": mni_warped_path, "resolution": mni_warped.shape},
+        processing=[{"RegistrationToMNI": {"Template": mni_template_path}}],
+        steps=["Registration to MNI space using ANTsPyNet"],
+        status="success",
+        metrics=[
+            {"warpedmovout": {"spacing": mni_transformation["warpedmovout"].spacing, "origin": mni_transformation["warpedmovout"].origin, "direction": mni_transformation["warpedmovout"].direction.tolist()}},
+            {"warpedfixout": {"spacing": mni_transformation["warpedfixout"].spacing, "origin": mni_transformation["warpedfixout"].origin, "direction": mni_transformation["warpedfixout"].direction.tolist()}},
+        ]
+    )
+
+@BIDSProcessSummarySidecar.execute_process
+def n4_bias_field_correction(input_filepath: str | PosixPath, layout: BIDSLayout, pipeline_name: str, overwrite: bool = False) -> Optional[BIDSProcessResults]:
     """
     Execute N4 bias field correction.
+    
+    Args:
+        input_filepath (str | PosixPath): Input NIfTI file path.
+        layout (BIDSLayout): BIDSLayout object.
+        pipeline_name (str): Name of the pipeline.
+        
+    Returns:
+        Optional[BIDSProcessResults]: Results of the process. If output file already exists, returns None.
     """
     input_filepath: str = str(input_filepath)
     if not input_filepath.endswith((".nii.gz", ".nii")):
         raise ValueError(f"Expected a NIfTI file, got {input_filepath}")
-    BIDS_DESC_ENTITY: str = "n4bfc"
-    try:
-        input_nii: ants.ANTsImage = ants.image_read(input_filepath)
-        n4_bfc: ants.ANTsImage = ants.n4_bias_field_correction(input_nii, shrink_factor=4, convergence={'iters': [50, 50, 30, 20], 'tol': 1e-7})
-        n4_bfc_path = get_new_pipeline_derived_filename(input_filepath, layout, pipeline_name, BIDS_DESC_ENTITY, ".nii.gz")
-        
-        if not overwrite and Path(n4_bfc_path).exists():
-            print(f"File {n4_bfc_path} already exists. Skipping.")
-            return BIDS_DESC_ENTITY
-        Path(n4_bfc_path).parent.mkdir(parents=True, exist_ok=True)
-        n4_bfc.to_filename(n4_bfc_path)
-        
-        sidecar: dict = {
-            "Space": "MNI152NLin2009cAsym",
-            "SkullStripped": True,
-            "Cropped": True,
-            "Resampled": True,
-            "N4BiasFieldCorrection": True,
-            "Resolutions": {
-                "Original": input_nii.shape,
-                "N4BiasFieldCorrection": n4_bfc.shape
-            },
-            "N4BiasFieldCorrection": {
-                "BSplineFittingDistance": 300,
-                "ShrinkFactor": 4,
-                "Iterations": [50, 50, 30, 20]
-            },
-            "Steps": [
-                "N4 bias field correction using ANTsPyNet"
-            ]
-        }
-        sidecar_filepath: str = get_new_pipeline_derived_filename(input_filepath, layout, pipeline_name, BIDS_DESC_ENTITY, ".json")
-        save_sidecar(sidecar, sidecar_filepath)
-        return BIDS_DESC_ENTITY
-    except Exception as e:
-        print(f"Failed to run N4 bias field correction for {input_filepath}: {e}")
-        sidecar: dict = {
-            "Space": "MNI152NLin2009cAsym",
-            "SkullStripped": False,
-            "Cropped": False,
-            "Resampled": False,
-            "Resolutions": {
-                "Original": input_nii.shape
-            },
-            "N4BiasFieldCorrection": {
-                "BSplineFittingDistance": 300,
-                "ShrinkFactor": 4,
-                "Iterations": [50, 50, 30, 20],
-                "Error": str(e)
-            },
-            "Steps": [
-                "N4 bias field correction"
-            ]
-        }
-        sidecar_filepath: str = get_new_pipeline_derived_filename(input_filepath, layout, pipeline_name, BIDS_DESC_ENTITY, ".json")
-        save_sidecar(sidecar, sidecar_filepath)
+    suffix: str = "T1w"
+    SHRINK_FACTOR: int = 4
+    CONVERGENCE: dict = {'iters': [50, 50, 30, 20], 'tol': 1e-7}
+    n4_bfc_path = get_new_pipeline_derived_filename(input_filepath, layout, pipeline_name, BIDS_DESC_ENTITY_N4BFC, ".nii.gz", suffix=suffix)
+    if not overwrite and Path(n4_bfc_path).exists():
+        print(f"File {n4_bfc_path} already exists. Skipping.")
+        return None
+    input_nii: ants.ANTsImage = ants.image_read(input_filepath)
+    
+    n4_bfc: ants.ANTsImage = ants.n4_bias_field_correction(input_nii, shrink_factor=SHRINK_FACTOR, convergence=CONVERGENCE)
+    
+    Path(n4_bfc_path).parent.mkdir(parents=True, exist_ok=True)
+    n4_bfc.to_filename(n4_bfc_path)
+    
+    return BIDSProcessResults(
+        input={"path": input_filepath, "resolution": input_nii.shape},
+        output={"path": n4_bfc_path, "resolution": n4_bfc.shape},
+        processing=[{"N4BiasFieldCorrection": {"ShrinkFactor": SHRINK_FACTOR, "Convergence": CONVERGENCE}}],
+        steps=["N4 bias field correction using ANTsPyNet"],
+        status="success",
+        metrics=[{"ShrinkFactor": SHRINK_FACTOR, "Convergence": CONVERGENCE}]
+    )
 
-def brain_extraction_antspynet(input_filepath: str | PosixPath, layout: BIDSLayout, pipeline_name: str, overwrite: bool = False, modality: str = "t1") -> None:
+@BIDSProcessSummarySidecar.execute_process
+def brain_extraction_antspynet(input_filepath: str | PosixPath, layout: BIDSLayout, pipeline_name: str, overwrite: bool = False, modality: str = "t1") -> Optional[BIDSProcessResults]:
     """
     Execute brain extraction using ANTsPyNet.
+    
+    Args:
+        input_filepath (str | PosixPath): Input NIfTI file path.
+        layout (BIDSLayout): BIDSLayout object.
+        pipeline_name (str): Name of the pipeline.
+        overwrite (bool, optional): Overwrite existing files. Defaults to False.
+        modality (str, optional): Modality of the image. Defaults to "t1".
+        
+    Returns:
+        Optional[BIDSProcessResults]: Results of the process. If output file already exists, returns None.
     """
     input_filepath: str = str(input_filepath)
     if not input_filepath.endswith((".nii.gz", ".nii")):
         raise ValueError(f"Expected a NIfTI file, got {input_filepath}")
-    BIDS_DESC_ENTITY: str = "brainExtract"
-    try:
-        input_nii: ants.ANTsImage = ants.image_read(input_filepath)
-        prob_brain_mask = brain_extraction(input_nii, modality=modality)
-        prob_brain_mask_path = get_new_pipeline_derived_filename(input_filepath, layout, pipeline_name, "probBrainMask", ".nii.gz")
-        if not overwrite and Path(prob_brain_mask_path).exists():
-            print(f"File {prob_brain_mask_path} already exists. Skipping.")
-            return BIDS_DESC_ENTITY
-        Path(prob_brain_mask_path).parent.mkdir(parents=True, exist_ok=True)
-        prob_brain_mask.to_filename(prob_brain_mask_path)
-        brain_extract = ants.mask_image(input_nii, prob_brain_mask)
-        brain_extract_path = get_new_pipeline_derived_filename(input_filepath, layout, pipeline_name, BIDS_DESC_ENTITY, ".nii.gz")
+    suffix: str = "T1w"
+    brain_extract_path = get_new_pipeline_derived_filename(input_filepath, layout, pipeline_name, BIDS_DESC_ENTITY_BRAIN_EXTRACT, ".nii.gz", suffix=suffix)
+    if not overwrite and Path(brain_extract_path).exists():
+        print(f"File {brain_extract_path} already exists. Skipping.")
+        return None
+    input_nii: ants.ANTsImage = ants.image_read(input_filepath)
+    prob_brain_mask_path = get_new_pipeline_derived_filename(input_filepath, layout, pipeline_name, BIDS_DESC_ENTITY_PROB_BRAIN_MASK, ".nii.gz", suffix="mask")
+    prob_brain_mask = brain_extraction(input_nii, modality=modality)
+    Path(prob_brain_mask_path).parent.mkdir(parents=True, exist_ok=True)
+    prob_brain_mask.to_filename(prob_brain_mask_path)
+    brain_extract = ants.mask_image(input_nii, prob_brain_mask)
 
-        brain_extract.to_filename(brain_extract_path)
-        
-        sidecar: dict = {
-            "Space": "MNI152NLin2009cAsym",
-            "BrainExtracted": True,
-            "Resampled": False,
-            "Resolutions": {
-                "Original": input_nii.shape,
-                "BrainExtracted": brain_extract.shape
-            },
-            "Steps": [
-                "Brain extracted using ANTsPyNet"
-            ]
-        }
-        sidecar_filepath: str = get_new_pipeline_derived_filename(input_filepath, layout, pipeline_name, BIDS_DESC_ENTITY, ".json")
-        save_sidecar(sidecar, sidecar_filepath)
-        return BIDS_DESC_ENTITY
-    except Exception as e:
-        print(f"Failed to run brain extraction for {input_filepath}: {e}")
-        sidecar: dict = {
-            "Space": "MNI152NLin2009cAsym",
-            "BrainExtracted": False,
-            "Resampled": False,
-            "Resolutions": {
-                "Original": input_nii.shape
-            },
-            "Error": str(e),
-            "Steps": [
-                "Brain extraction using ANTsPyNet"
-            ]
-        }
-        sidecar_filepath: str = get_new_pipeline_derived_filename(input_filepath, layout, pipeline_name, BIDS_DESC_ENTITY, ".json")
-        save_sidecar(sidecar, sidecar_filepath)
+    brain_extract.to_filename(brain_extract_path)
+    
+    return BIDSProcessResults(
+        input={"path": input_filepath, "resolution": input_nii.shape},
+        output={"path": brain_extract_path, "resolution": brain_extract.shape},
+        processing=[{"BrainExtraction": {"Modality": modality}}],
+        steps=["Brain extraction using ANTsPyNet"],
+        status="success",
+        metrics=[{"Modality": modality}]
+    )
