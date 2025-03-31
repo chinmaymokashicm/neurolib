@@ -1,6 +1,6 @@
 from collections.abc import MutableMapping
 from typing import Optional
-import json
+import json, os
 
 import numpy as np
 
@@ -62,6 +62,29 @@ def clean_string_bids_entity(string: str) -> str:
     BIDS entities should not contain special characters. This function removes special characters from a string.
     """
     return "".join(e for e in string if e.isalnum())
+
+
+def get_env_variables(env_vars: dict[str, bool]) -> list[str]:
+    """
+    Get environment variables.
+    
+    Args:
+        env_vars: Dictionary of environment variables with keys as variable names and values as whether the variable is required
+        
+    Returns:
+        List of environment variable values.
+        
+    Raises:
+        EnvironmentError: If a required environment variable is not set.
+    """
+    values = []
+    for var, required in env_vars.items():
+        value = os.getenv(var)
+        if required and value is None:
+            raise EnvironmentError(f"Required environment variable '{var}' is not set.")
+        else:
+            values.append(value)
+    return values
 
 
 class NumpyEncoder(json.JSONEncoder):
