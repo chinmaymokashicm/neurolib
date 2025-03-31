@@ -27,7 +27,7 @@ class ParcellationAtlas(str, Enum):
     DESIKAN_KILLIANY_TOURVILLE = "desikanKillianyTourville"
 
 @BIDSProcessSummarySidecar.execute_process
-def cortical_thickness_by_region(input_filepath: str | PosixPath, layout: BIDSLayout, pipeline_name: str, overwrite: bool = False, atlas_name: ParcellationAtlas = ParcellationAtlas.HARVARD_OXFORD) -> Optional[BIDSProcessResults]:
+def cortical_thickness_by_region(input_filepath: str | PosixPath, layout: BIDSLayout, pipeline_name: str, overwrite: bool = False, atlas_name: ParcellationAtlas = ParcellationAtlas.HARVARD_OXFORD, process_id: Optional[str] = None, process_exec_id: Optional[str] = None, pipeline_id: Optional[str] = None) -> Optional[BIDSProcessResults]:
     """
     Generate cortical thickness values by region of parcellations.
     
@@ -43,6 +43,9 @@ def cortical_thickness_by_region(input_filepath: str | PosixPath, layout: BIDSLa
         pipeline_name (str): Name of the pipeline.
         overwrite (bool, optional): Overwrite existing files. Defaults to False.
         atlas_name (ParcellationAtlas, optional): Parcellation atlas name. Defaults to ParcellationAtlas.HARVARD_OXFORD.
+        process_id (Optional[str], optional): Process ID. Defaults to None.
+        process_exec_id (Optional[str], optional): Process execution ID. Defaults to None.
+        pipeline_id (Optional[str], optional): Pipeline ID. Defaults to None.
     
     Returns:
         Optional[BIDSProcessResults]: Results of the process. If output file already exists, returns None.
@@ -137,6 +140,9 @@ def cortical_thickness_by_region(input_filepath: str | PosixPath, layout: BIDSLa
     df_cortical_thickness_region_stats.to_csv(cortical_thickness_region_stats_path, index=False)
     
     return BIDSProcessResults(
+        process_id=process_id,
+        process_exec_id=process_exec_id,
+        pipeline_id=pipeline_id,
         input={"path": input_filepath, "resolution": cortical_thickness_img.shape},
         output={"path": cortical_thickness_region_stats_path},
         processing=[{"CorticalThicknessByRegion": {"Parcellation": parcellation_img_path}}],
@@ -147,7 +153,7 @@ def cortical_thickness_by_region(input_filepath: str | PosixPath, layout: BIDSLa
     
     
 @BIDSProcessSummarySidecar.execute_process
-def tissue_segment_stats_per_region(input_filepath: str | PosixPath, layout: BIDSLayout, pipeline_name: str, overwrite: bool = False, atlas_name: ParcellationAtlas = ParcellationAtlas.HARVARD_OXFORD) -> Optional[BIDSProcessResults]:
+def tissue_segment_stats_per_region(input_filepath: str | PosixPath, layout: BIDSLayout, pipeline_name: str, overwrite: bool = False, atlas_name: ParcellationAtlas = ParcellationAtlas.HARVARD_OXFORD, process_id: Optional[str] = None, process_exec_id: Optional[str] = None, pipeline_id: Optional[str] = None) -> Optional[BIDSProcessResults]:
     """
     Generate statistics of tissue segments by region of parcellations (ROIs).
     
@@ -165,6 +171,9 @@ def tissue_segment_stats_per_region(input_filepath: str | PosixPath, layout: BID
         pipeline_name (str): Name of the pipeline.
         overwrite (bool, optional): Overwrite existing files. Defaults to False.
         atlas_name (ParcellationAtlas, optional): Parcellation atlas name. Defaults to ParcellationAtlas.HARVARD_OXFORD.
+        process_id (Optional[str], optional): Process ID. Defaults to None.
+        process_exec_id (Optional[str], optional): Process execution ID. Defaults to None.
+        pipeline_id (Optional[str], optional): Pipeline ID. Defaults to None.
         
     Returns:
         Optional[BIDSProcessResults]: Results of the process. If output file already exists, returns None.
@@ -315,6 +324,9 @@ def tissue_segment_stats_per_region(input_filepath: str | PosixPath, layout: BID
     df_tissue_segment_stats_region.to_csv(tissue_segment_stats_region_path, index=False)
     
     return BIDSProcessResults(
+        process_id=process_id,
+        process_exec_id=process_exec_id,
+        pipeline_id=pipeline_id,
         input={"path": seg_filepath, "resolution": tissue_segmentation_img.shape},
         output={"path": tissue_segment_stats_region_path},
         processing=[{"TissueSegmentStatsByRegion": {"Parcellation": parcellation_img_path}}],

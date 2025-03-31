@@ -14,7 +14,7 @@ from antspynet.utilities import brain_extraction
 from bids import BIDSLayout
 
 @BIDSProcessSummarySidecar.execute_process
-def registration_to_mni(input_filepath: str | PosixPath, layout: BIDSLayout, pipeline_name: str, mni_template_path: str, overwrite: bool = False) -> Optional[BIDSProcessResults]:
+def registration_to_mni(input_filepath: str | PosixPath, layout: BIDSLayout, pipeline_name: str, mni_template_path: str, overwrite: bool = False, process_id: Optional[str] = None, process_exec_id: Optional[str] = None, pipeline_id: Optional[str] = None) -> Optional[BIDSProcessResults]:
     """
     Execute image registration to MNI space.
     
@@ -24,6 +24,9 @@ def registration_to_mni(input_filepath: str | PosixPath, layout: BIDSLayout, pip
         pipeline_name (str): Name of the pipeline.
         mni_template_path (str): Path to the MNI template.
         overwrite (bool, optional): Overwrite existing files. Defaults to False.
+        process_id (Optional[str], optional): Process ID. Defaults to None.
+        process_exec_id (Optional[str], optional): Process execution ID. Defaults to None.
+        pipeline_id (Optional[str], optional): Pipeline ID. Defaults to None.
         
     Returns:
         Optional[BIDSProcessResults]: Results of the process. If output file already exists, returns None.
@@ -56,6 +59,9 @@ def registration_to_mni(input_filepath: str | PosixPath, layout: BIDSLayout, pip
     mni_warped.to_filename(mni_warped_path)
     
     return BIDSProcessResults(
+        process_id=process_id,
+        process_exec_id=process_exec_id,
+        pipeline_id=pipeline_id,
         input={"path": input_filepath, "resolution": input_nii.shape},
         output={"path": mni_warped_path, "resolution": mni_warped.shape},
         processing=[{"RegistrationToMNI": {"Template": mni_template_path}}],
@@ -68,7 +74,7 @@ def registration_to_mni(input_filepath: str | PosixPath, layout: BIDSLayout, pip
     )
 
 @BIDSProcessSummarySidecar.execute_process
-def n4_bias_field_correction(input_filepath: str | PosixPath, layout: BIDSLayout, pipeline_name: str, overwrite: bool = False) -> Optional[BIDSProcessResults]:
+def n4_bias_field_correction(input_filepath: str | PosixPath, layout: BIDSLayout, pipeline_name: str, overwrite: bool = False, process_id: Optional[str] = None, process_exec_id: Optional[str] = None, pipeline_id: Optional[str] = None) -> Optional[BIDSProcessResults]:
     """
     Execute N4 bias field correction.
     
@@ -76,6 +82,10 @@ def n4_bias_field_correction(input_filepath: str | PosixPath, layout: BIDSLayout
         input_filepath (str | PosixPath): Input NIfTI file path.
         layout (BIDSLayout): BIDSLayout object.
         pipeline_name (str): Name of the pipeline.
+        overwrite (bool, optional): Overwrite existing files. Defaults to False.
+        process_id (Optional[str], optional): Process ID. Defaults to None.
+        process_exec_id (Optional[str], optional): Process execution ID. Defaults to None.
+        pipeline_id (Optional[str], optional): Pipeline ID. Defaults to None.
         
     Returns:
         Optional[BIDSProcessResults]: Results of the process. If output file already exists, returns None.
@@ -98,6 +108,9 @@ def n4_bias_field_correction(input_filepath: str | PosixPath, layout: BIDSLayout
     n4_bfc.to_filename(n4_bfc_path)
     
     return BIDSProcessResults(
+        process_id=process_id,
+        process_exec_id=process_exec_id,
+        pipeline_id=pipeline_id,
         input={"path": input_filepath, "resolution": input_nii.shape},
         output={"path": n4_bfc_path, "resolution": n4_bfc.shape},
         processing=[{"N4BiasFieldCorrection": {"ShrinkFactor": SHRINK_FACTOR, "Convergence": CONVERGENCE}}],
@@ -107,7 +120,7 @@ def n4_bias_field_correction(input_filepath: str | PosixPath, layout: BIDSLayout
     )
 
 @BIDSProcessSummarySidecar.execute_process
-def brain_extraction_antspynet(input_filepath: str | PosixPath, layout: BIDSLayout, pipeline_name: str, overwrite: bool = False, modality: str = "t1") -> Optional[BIDSProcessResults]:
+def brain_extraction_antspynet(input_filepath: str | PosixPath, layout: BIDSLayout, pipeline_name: str, overwrite: bool = False, process_id: Optional[str] = None, process_exec_id: Optional[str] = None, pipeline_id: Optional[str] = None, modality: str = "t1") -> Optional[BIDSProcessResults]:
     """
     Execute brain extraction using ANTsPyNet.
     
@@ -116,6 +129,9 @@ def brain_extraction_antspynet(input_filepath: str | PosixPath, layout: BIDSLayo
         layout (BIDSLayout): BIDSLayout object.
         pipeline_name (str): Name of the pipeline.
         overwrite (bool, optional): Overwrite existing files. Defaults to False.
+        process_id (Optional[str], optional): Process ID. Defaults to None.
+        process_exec_id (Optional[str], optional): Process execution ID. Defaults to None.
+        pipeline_id (Optional[str], optional): Pipeline ID. Defaults to None.
         modality (str, optional): Modality of the image. Defaults to "t1".
         
     Returns:
@@ -139,6 +155,9 @@ def brain_extraction_antspynet(input_filepath: str | PosixPath, layout: BIDSLayo
     brain_extract.to_filename(brain_extract_path)
     
     return BIDSProcessResults(
+        process_id=process_id,
+        pipeline_id=pipeline_id,
+        process_exec_id=process_exec_id,
         input={"path": input_filepath, "resolution": input_nii.shape},
         output={"path": brain_extract_path, "resolution": brain_extract.shape},
         processing=[{"BrainExtraction": {"Modality": modality}}],

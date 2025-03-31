@@ -21,7 +21,7 @@ from nilearn.image import resample_to_img, load_img
 from nilearn.input_data import NiftiLabelsMasker
 
 @BIDSProcessSummarySidecar.execute_process
-def atropos_tissue_segmentation(input_filepath: str | PosixPath, layout: BIDSLayout, pipeline_name: str, overwrite: bool = False) -> Optional[BIDSProcessSummarySidecar]:
+def atropos_tissue_segmentation(input_filepath: str | PosixPath, layout: BIDSLayout, pipeline_name: str, overwrite: bool = False, process_id: Optional[str] = None,  process_exec_id: Optional[str] = None,pipeline_id: Optional[str] = None) -> Optional[BIDSProcessSummarySidecar]:
     """
     Execute tissue segmentation using ANTs Finite Mixture Modeling.
     
@@ -37,6 +37,9 @@ def atropos_tissue_segmentation(input_filepath: str | PosixPath, layout: BIDSLay
         layout (BIDSLayout): BIDSLayout object.
         pipeline_name (str): Name of the pipeline.
         overwrite (bool, optional): Overwrite existing files. Defaults to False.
+        process_id (Optional[str], optional): Process ID. Defaults to None.
+        process_exec_id (Optional[str], optional): Process Execution ID. Defaults to None.
+        pipeline_id (Optional[str], optional): Pipeline ID. Defaults to None.
         
     Returns:
         Optional[BIDSProcessResults]: Results of the process. If output file already exists, returns None.
@@ -93,6 +96,9 @@ def atropos_tissue_segmentation(input_filepath: str | PosixPath, layout: BIDSLay
             print(f"Failed to calculate label stats for {input_filepath}: {e}")
     
     return BIDSProcessResults(
+        process_id=process_id,
+        process_exec_id=process_exec_id,
+        pipeline_id=pipeline_id,
         input={"path": input_filepath, "resolution": input_nii.shape},
         output={"path": tissue_segment_path, "resolution": prob_maps.shape},
         processing=[{"Atropos": {"Initialization Method": "kmeans[3]", "Convergence": "[5,0]", "Prior": "[0.2,1x1x1]"}}],
@@ -102,7 +108,7 @@ def atropos_tissue_segmentation(input_filepath: str | PosixPath, layout: BIDSLay
     )
         
 @BIDSProcessSummarySidecar.execute_process
-def deep_atropos_tissue_segmentation(input_filepath: str | PosixPath, layout: BIDSLayout, pipeline_name: str, overwrite: bool = False) -> Optional[BIDSProcessResults]:
+def deep_atropos_tissue_segmentation(input_filepath: str | PosixPath, layout: BIDSLayout, pipeline_name: str, overwrite: bool = False, process_id: Optional[str] = None, process_exec_id: Optional[str] = None, pipeline_id: Optional[str] = None) -> Optional[BIDSProcessResults]:
     """
     Execute tissue segmentation using ANTs Deep Learning (deep_atropos).
     
@@ -117,6 +123,9 @@ def deep_atropos_tissue_segmentation(input_filepath: str | PosixPath, layout: BI
         layout (BIDSLayout): BIDSLayout object.
         pipeline_name (str): Name of the pipeline.
         overwrite (bool, optional): Overwrite existing files. Defaults to False.
+        process_id (Optional[str], optional): Process ID. Defaults to None.
+        process_exec_id (Optional[str], optional): Process Execution ID. Defaults to None.
+        pipeline_id (Optional[str], optional): Pipeline ID. Defaults to None.
         
     Returns:
         Optional[BIDSProcessResults]: Results of the process. If output file already exists, returns None.
@@ -162,6 +171,9 @@ def deep_atropos_tissue_segmentation(input_filepath: str | PosixPath, layout: BI
             print(f"Failed to calculate label stats for {input_filepath}: {e}")
             
     return BIDSProcessResults(
+        process_id=process_id,
+        process_exec_id=process_exec_id,
+        pipeline_id=pipeline_id,
         input={"path": input_filepath, "resolution": input_nii.shape},
         output={"path": tissue_segment_path, "resolution": tissue_segment.shape},
         processing=[{"DeepAtropos": {"Model": "Deep Atropos in ANTs"}}],
@@ -171,7 +183,7 @@ def deep_atropos_tissue_segmentation(input_filepath: str | PosixPath, layout: BI
     )
 
 @BIDSProcessSummarySidecar.execute_process
-def brain_parcellation_harvard_oxford_nilearn(input_filepath: str | PosixPath, layout: BIDSLayout, pipeline_name: str, atlas_spec: str, overwrite: bool = False) -> Optional[BIDSProcessSummarySidecar]:
+def brain_parcellation_harvard_oxford_nilearn(input_filepath: str | PosixPath, layout: BIDSLayout, pipeline_name: str, atlas_spec: str, overwrite: bool = False, process_id: Optional[str] = None, process_exec_id: Optional[str] = None, pipeline_id: Optional[str] = None) -> Optional[BIDSProcessSummarySidecar]:
     """
     Execute brain parcellation using nilearn's fetch_atlas_harvard_oxford.
     
@@ -182,11 +194,14 @@ def brain_parcellation_harvard_oxford_nilearn(input_filepath: str | PosixPath, l
     5. Saves the process summary sidecar.
     
     Args:
-        input_filepath: Input NIfTI file path
-        layout: BIDSLayout object.
-        pipeline_name: Name of the pipeline.
-        atlas_spec: Atlas specification for nilearn's fetch_atlas_harvard_oxford.
-        overwrite: Overwrite existing files.
+        input_filepath (str | PosixPath): Input NIfTI file path.
+        layout (BIDSLayout): BIDSLayout object.
+        pipeline_name (str): Name of the pipeline.
+        atlas_spec (str): Name of the atlas specification.
+        overwrite (bool, optional): Overwrite existing files. Defaults to False.
+        process_id (Optional[str], optional): Process ID. Defaults to None.
+        process_exec_id (Optional[str], optional): Process Execution ID. Defaults to None.
+        pipeline_id (Optional[str], optional): Pipeline ID. Defaults to None.
         
     Returns:
         Optional[BIDSProcessSummarySidecar]: Process summary sidecar if successful, else None.
@@ -235,6 +250,9 @@ def brain_parcellation_harvard_oxford_nilearn(input_filepath: str | PosixPath, l
     region_signals_dict = {atlas_labels[i]: round(float(region_signals[0, i]), 2) for i in range(len(atlas_labels))}
     
     return BIDSProcessResults(
+        process_id=process_id,
+        process_exec_id=process_exec_id,
+        pipeline_id=pipeline_id,
         input={"path": input_filepath, "resolution": input_nii.shape},
         output={"path": parcellation_path, "resolution": resampled_atlas.shape},
         processing=[{"Atlas": {"Name": atlas_spec, "Labels": atlas_labels}}],
@@ -244,7 +262,7 @@ def brain_parcellation_harvard_oxford_nilearn(input_filepath: str | PosixPath, l
     )
         
 @BIDSProcessSummarySidecar.execute_process
-def brain_parcellation_desikan_killiany_tourville(input_filepath: str | PosixPath, layout: BIDSLayout, pipeline_name: str, overwrite: bool = False) -> Optional[BIDSProcessResults]:
+def brain_parcellation_desikan_killiany_tourville(input_filepath: str | PosixPath, layout: BIDSLayout, pipeline_name: str, overwrite: bool = False, process_id: Optional[str] = None, process_exec_id: Optional[str] = None, pipeline_id: Optional[str] = None) -> Optional[BIDSProcessResults]:
     """
     Execute brain parcellation using ANTs' Desikan-Killiany-Tourville labeling.
     
@@ -255,10 +273,13 @@ def brain_parcellation_desikan_killiany_tourville(input_filepath: str | PosixPat
     4. Saves the parcellation as a NIfTI file.
     
     Args:
-        input_filepath: Input NIfTI file path.
-        layout: BIDSLayout object.
-        pipeline_name: Name of the pipeline.
-        overwrite: Overwrite existing files.
+        input_filepath (str | PosixPath): Input NIfTI file path.
+        layout (BIDSLayout): BIDSLayout object.
+        pipeline_name (str): Name of the pipeline.
+        overwrite (bool, optional): Overwrite existing files. Defaults to False.
+        process_id (Optional[str], optional): Process ID. Defaults to None.
+        process_exec_id (Optional[str], optional): Process Execution ID. Defaults to None.
+        pipeline_id (Optional[str], optional): Pipeline ID. Defaults to None.
         
     Returns:
         Optional[BIDSProcessResults]: Results of the process. If output file already exists, returns None.
@@ -296,6 +317,9 @@ def brain_parcellation_desikan_killiany_tourville(input_filepath: str | PosixPat
     parc.to_filename(parcellation_path)
     
     return BIDSProcessResults(
+        process_id=process_id,
+        process_exec_id=process_exec_id,
+        pipeline_id=pipeline_id,
         input={"path": input_filepath, "resolution": input_nii.shape},
         output={"path": parcellation_path, "resolution": parc.shape},
         processing=[{"Atlas": {"Name": "Desikan-Killiany-Tourville", "Labels": region_labels}}],
@@ -305,7 +329,7 @@ def brain_parcellation_desikan_killiany_tourville(input_filepath: str | PosixPat
     )
 
 @BIDSProcessSummarySidecar.execute_process
-def kelly_kapowski_cortical_thickness(input_filepath: str | PosixPath, layout: BIDSLayout, pipeline_name: str, overwrite: bool = False) -> Optional[BIDSProcessResults]:
+def kelly_kapowski_cortical_thickness(input_filepath: str | PosixPath, layout: BIDSLayout, pipeline_name: str, overwrite: bool = False, process_id: Optional[str] = None, process_exec_id: Optional[str] = None, pipeline_id: Optional[str] = None) -> Optional[BIDSProcessResults]:
     """
     Execute cortical thickness estimation using ANTs' Kelly-Kapowski algorithm.
     
@@ -316,10 +340,13 @@ def kelly_kapowski_cortical_thickness(input_filepath: str | PosixPath, layout: B
     4. Saves the cortical thickness image.
     
     Args:
-        input_filepath: Input NIfTI file path.
-        layout: BIDSLayout object.
-        pipeline_name: Name of the pipeline.
-        overwrite: Overwrite existing files.
+        input_filepath (str | PosixPath): Input NIfTI file path.
+        layout (BIDSLayout): BIDSLayout object.
+        pipeline_name (str): Name of the pipeline.
+        overwrite (bool, optional): Overwrite existing files. Defaults to False.
+        process_id (Optional[str], optional): Process ID. Defaults to None.
+        process_exec_id (Optional[str], optional): Process Execution ID. Defaults to None.
+        pipeline_id (Optional[str], optional): Pipeline ID. Defaults to None.
         
     Returns:
         Optional[BIDSProcessResults]: Results of the process. If output file already exists, returns None.
@@ -372,6 +399,9 @@ def kelly_kapowski_cortical_thickness(input_filepath: str | PosixPath, layout: B
     cortical_thickness_img_warped.to_filename(cortical_thickness_path)
     
     return BIDSProcessResults(
+        process_id=process_id,
+        process_exec_id=process_exec_id,
+        pipeline_id=pipeline_id,
         input={"path": input_filepath, "resolution": segment_nii.shape},
         output={"path": cortical_thickness_path, "resolution": cortical_thickness_img_warped.shape},
         processing=[{"KellyKapowski": {"Algorithm": "ANTs' Kelly-Kapowski"}}],
@@ -379,27 +409,3 @@ def kelly_kapowski_cortical_thickness(input_filepath: str | PosixPath, layout: B
         status="success",
         metrics=[]
     )
-    
-def kelly_kapowski_post_process(input_filepath: str | PosixPath, layout: BIDSLayout, pipeline_name: str, overwrite: bool = True) -> Optional[BIDSProcessResults]:
-    # Ensure that the input file is a cortical thickness file
-    input_filepath: str = str(input_filepath)
-    if not input_filepath.endswith((".nii.gz", ".nii")):
-        raise ValueError(f"Expected a NIfTI file, got {input_filepath}")
-    
-    # * Input filepath has to be a cortical thickness file - enforce this
-    input_filepath_entities: dict = parse_file_entities(input_filepath)
-    input_filepath_entities["desc"] = BIDS_DESC_ENTITY_CORTICAL_THICKNESS
-    input_filepath_entities["suffix"] = "thick"
-    try:
-        input_filepath = layout.get(return_type="file", **input_filepath_entities)[0]
-    except IndexError:
-        print(f"Could not find cortical thickness file for {input_filepath}. Skipping.")
-        
-    suffix: str = "thick"
-    cortical_thickness_path: str = get_new_pipeline_derived_filename(input_filepath, layout, pipeline_name, BIDS_DESC_ENTITY_CORTICAL_THICKNESS, ".nii.gz", suffix=suffix)
-    
-    if not overwrite and Path(cortical_thickness_path).exists():
-        print(f"File {cortical_thickness_path} already exists. Skipping.")
-        return None
-    
-    

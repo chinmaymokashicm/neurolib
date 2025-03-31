@@ -49,6 +49,7 @@ class BIDSProcessSummarySidecar(BaseModel):
     Sidecars that summarize the process.
     """
     process_id: Optional[str] = Field(title="Process ID", description="Unique identifier for the process", default=None)
+    process_exec_id: Optional[str] = Field(title="Process Execution ID", description="Unique identifier for the process execution", default=None)
     pipeline_id: Optional[str] = Field(title="Pipeline ID", description="Unique identifier for the pipeline", default=None)
     name: str = Field(title="Name", description="Name of the sidecar file to be saved (without extension)")
     description: Optional[str] = Field(title="Description", description="Description of the process", default=None)
@@ -119,11 +120,13 @@ class BIDSProcessSummarySidecar(BaseModel):
                 if results:
                     input, output, processing, steps, metrics = results.input, results.output, results.processing, results.steps, results.metrics
                     process_id: Optional[str] = results.process_id
+                    process_exec_id: Optional[str] = results.process_exec_id
                     pipeline_id: Optional[str] = results.pipeline_id
                     output_filepath: str = output["path"]
                     save_dir: PosixPath = Path(output_filepath).parent
                     process_summary: BIDSProcessSummarySidecar = BIDSProcessSummarySidecar(
                         process_id=process_id,
+                        process_exec_id=process_exec_id,
                         pipeline_id=pipeline_id,
                         name=Path(output_filepath).name,
                         pipeline_name=pipeline_name,
@@ -148,6 +151,7 @@ class BIDSProcessResults(BaseModel):
     Structure of the results of a BIDS Process.
     """
     process_id: Optional[str] = Field(description="Unique identifier for the process.", default=None)
+    process_exec_id: Optional[str] = Field(description="Unique identifier for the process execution.", default=None)
     pipeline_id: Optional[str] = Field(description="Unique identifier for the pipeline.", default=None)
     input: dict[str, Any] = Field(description="Information about the input. Should always contain the key 'path'.")
     output: dict[str, Any] = Field(description="Information about the output. Should always contain the key 'path'.")
