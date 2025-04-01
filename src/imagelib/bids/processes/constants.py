@@ -1,6 +1,6 @@
 import os
 
-ROOT_DIR: str = os.environ.get("IMAGELIB_HOME", None)
+ROOT_DIR: str = os.environ.get("IMAGELIB_HOME", os.getcwd())
 if ROOT_DIR is None:
     raise ValueError("IMAGELIB_HOME environment variable not set.")
 
