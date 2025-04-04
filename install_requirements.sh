@@ -21,6 +21,7 @@ source "$venv_name/bin/activate"
 # Install required packages
 echo "Installing required packages in virtual environment $venv_name..."
 pip install pydantic rich pybids nibabel pydicom nilearn matplotlib pandas numpy
+pip install antspyx
 # pip install antspyx antspynet scikit-image
 
 pip install ipython ipykernel ipywidgets
