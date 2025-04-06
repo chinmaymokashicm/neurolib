@@ -135,7 +135,7 @@ class SelectBIDSDatasetInfo(BaseModel):
         """
         return {
             "bids_root": str(self.bids_root),
-            "bids_files": [bids_file.filename for bids_file in self.bids_files],
+            "bids_files": [str(Path(bids_file.path).relative_to(self.bids_root)) for bids_file in self.bids_files],
             "dataset_description": self.dataset_description.model_dump(mode="json"),
             "derivatives": {key: value.to_dict() for key, value in self.derivatives.items()}
         }
@@ -163,12 +163,13 @@ class SelectBIDSFileInfo(BaseModel):
     acquisition_time: Optional[str]
     
     @classmethod
-    def from_BIDSFile(cls, bids_file: BIDSFile) -> "SelectBIDSFileInfo":
+    def from_BIDSFile(cls, bids_file: str | BIDSFile) -> "SelectBIDSFileInfo":
         """
         Create a SelectBIDSFileInfo object from a BIDSFile object.
         """
-        if not isinstance(bids_file, BIDSFile):
-            raise ValueError(f"Expected a BIDSFile object, got {type(bids_file)}")
+        # if not isinstance(bids_file, BIDSFile):
+        #     raise ValueError(f"Expected a BIDSFile object, got {type(bids_file)}")
+        bids_file: BIDSFile = bids_file if isinstance(bids_file, BIDSFile) else BIDSFile(bids_file)
         path: str = bids_file.path
         filename: str = bids_file.filename
         entities: dict = {key: str(value) for key, value in bids_file.entities.items() if value is not None}
