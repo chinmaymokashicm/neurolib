@@ -3,7 +3,7 @@ Code related to BIDS pipelines.
 """
 # from __future__ import annotations
 
-from .process import DatasetDescription, GeneratedBy
+from ..datasets.bids import DatasetDescription, GeneratedBy
 from ..helpers.data import clean_dict_values
 from .processes.base import BIDSProcess, BIDSProcessResults
 
