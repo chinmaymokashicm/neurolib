@@ -122,7 +122,7 @@ class SelectBIDSDatasetInfo(BaseModel):
         for sub_path in layout.derivatives:
             derivative_name: str = Path(sub_path).name
             derivative_path: DirectoryPath = bids_root / sub_path
-            derivatives[derivative_name] = SelectBIDSDatasetInfo.from_path(derivative_path, derivatives=get_derivatives)
+            derivatives[derivative_name] = SelectBIDSDatasetInfo.from_path(derivative_path, get_derivatives=get_derivatives)
         return cls(
             bids_root=bids_root,
             bids_files=bids_files,
