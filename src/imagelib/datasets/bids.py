@@ -110,12 +110,12 @@ class SelectBIDSDatasetInfo(BaseModel):
     derivatives: Optional[dict[str, "SelectBIDSDatasetInfo"]] = Field(title="Derivatives", description="Derivatives information", default_factory=dict)
 
     @classmethod
-    def from_path(cls, path: str | DirectoryPath) -> "SelectBIDSDatasetInfo":
+    def from_path(cls, path: str | DirectoryPath, get_derivatives: bool = True) -> "SelectBIDSDatasetInfo":
         """
         Load BIDS dataset information from a directory.
         """
         bids_root: DirectoryPath = Path(path)
-        layout: BIDSLayout = BIDSLayout(bids_root, derivatives=True)
+        layout: BIDSLayout = BIDSLayout(bids_root, derivatives=get_derivatives)
         dataset_description: DatasetDescription = DatasetDescription.from_file(bids_root / "dataset_description.json")
         bids_files: list[BIDSFile] = layout.get()
         derivatives: dict[str, str] = {}
