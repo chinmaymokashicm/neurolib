@@ -15,9 +15,9 @@ from bids.layout import BIDSFile
 
 class GeneratedBy(BaseModel):
     Name: str = Field(title="Name", description="Name of the software used to generate the dataset")
-    Version: Optional[str] = Field(title="Version", description="Version of the software used to generate the dataset")
-    Description: Optional[str] = Field(title="Description", description="Description of the software used to generate the dataset")
-    CodeURL: Optional[str] = Field(title="Code URL", description="URL to the code used to generate the dataset")
+    Version: Optional[str] = Field(title="Version", description="Version of the software used to generate the dataset", default=None)
+    Description: Optional[str] = Field(title="Description", description="Description of the software used to generate the dataset", default=None)
+    CodeURL: Optional[str] = Field(title="Code URL", description="URL to the code used to generate the dataset", default=None)
     Container: Optional[dict[str, str]] = Field(title="Container", description="Container information", default={})
 
 class DatasetDescription(BaseModel):
