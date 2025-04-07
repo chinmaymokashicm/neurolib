@@ -98,6 +98,83 @@ def update_participants_json(participants_dict: Optional[dict], overwrite: bool 
             participants_dict[key] = value
     return participants_dict
 
+class BIDSTree(BaseModel):
+    """
+    BIDS tree. Define the structure of the pipeline dataset.
+    """
+    dataset_description: Optional[DatasetDescription] = Field(title="Dataset description", description="Dataset description", default=None)
+    readme_text: Optional[str] = Field(title="Readme text", description="Readme text", default=None)
+    citation_text: Optional[str] = Field(title="Citation text", description="Citation text", default=None)
+    changes_text: Optional[str] = Field(title="Changes text", description="Changes text", default=None)
+    license_text: Optional[str] = Field(title="License text", description="License text", default=None)
+            
+    @classmethod
+    def from_path(cls, dirpath: str | DirectoryPath) -> "BIDSTree":
+        """
+        Load pipeline tree from a directory.
+        """
+        dirpath: PosixPath = Path(dirpath)
+        dataset_description: DatasetDescription = DatasetDescription.from_file(dirpath / "dataset_description.json")
+        with open(dirpath / "README", "r") as f:
+            readme_text: str = f.read()
+        with open(dirpath / "CITATION", "r") as f:
+            citation_text: str = f.read()
+        with open(dirpath / "CHANGES", "r") as f:
+            changes_text: str = f.read()
+        with open(dirpath / "LICENSE", "r") as f:
+            license_text: str = f.read()
+        return cls(
+            dataset_description=dataset_description,
+            readme_text=readme_text,
+            citation_text=citation_text,
+            changes_text=changes_text,
+            license_text=license_text
+        )
+    
+    def to_dict(self) -> dict:
+        """
+        Convert the pipeline tree to a dictionary.
+        """
+        return {
+            "dataset_description": self.dataset_description.model_dump(mode="json"),
+            "readme_text": self.readme_text,
+            "citation_text": self.citation_text,
+            "changes_text": self.changes_text,
+            "license_text": self.license_text
+        }
+    
+    def set_default_values(self, name: str):
+        if not self.dataset_description:
+            self.dataset_description = DatasetDescription(Name=name)
+        if not self.readme_text:
+            self.readme_text = f"# {name} Pipeline\n\n"
+        if not self.citation_text:
+            self.citation_text = f"# {name}\n\n"
+        if not self.changes_text:
+            self.changes_text = f"# {name}\n\n"
+        if not self.license_text:
+            self.license_text = f"# {name}\n\n"
+            
+    def create(self, dirpath: str | DirectoryPath, overwrite: bool = False) -> None:
+        """
+        Create the pipeline tree.
+        """
+        dirpath: PosixPath = Path(dirpath)
+        if dirpath.exists() and not overwrite:
+            print(f"Directory {dirpath} already exists. Skipping creation.")
+            return
+        dirpath.mkdir(parents=True, exist_ok=True)
+        with open(dirpath / "dataset_description.json", "w") as f:
+            f.write(self.dataset_description.model_dump_json(indent=4))
+        with open(dirpath / "README", "w") as f:
+            f.write(self.readme_text)
+        with open(dirpath / "CITATION", "w") as f:
+            f.write(self.citation_text)
+        with open(dirpath / "CHANGES", "w") as f:
+            f.write(self.changes_text)
+        with open(dirpath / "LICENSE", "w") as f:
+            f.write(self.license_text)
+
 class SelectBIDSDatasetInfo(BaseModel):
     """
     Selected BIDS dataset information.

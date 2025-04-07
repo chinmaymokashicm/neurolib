@@ -3,7 +3,7 @@ Code related to BIDS pipelines.
 """
 # from __future__ import annotations
 
-from ..datasets.bids import DatasetDescription, GeneratedBy
+from ..datasets.bids import DatasetDescription, GeneratedBy, BIDSTree
 from ..helpers.data import clean_dict_values
 from .processes.base import BIDSProcess, BIDSProcessResults
 
@@ -57,63 +57,6 @@ def get_new_pipeline_derived_filename(bids_file: BIDSFile | str, bids_layout: BI
     derivative_filename: str = build_path(entities, path_patterns, strict=False)
     return str(Path(bids_layout.root) / "derivatives" / pipeline_name / derivative_filename)
 
-class BIDSPipelineTree(BaseModel):
-    """
-    BIDS pipeline tree. Define the structure of the pipeline dataset.
-    """
-    dataset_description: Optional[DatasetDescription] = Field(title="Dataset description", description="Dataset description", default=None)
-    readme_text: Optional[str] = Field(title="Readme text", description="Readme text", default=None)
-    citation_text: Optional[str] = Field(title="Citation text", description="Citation text", default=None)
-    changes_text: Optional[str] = Field(title="Changes text", description="Changes text", default=None)
-    license_text: Optional[str] = Field(title="License text", description="License text", default=None)
-            
-    @classmethod
-    def from_path(cls, dirpath: str | DirectoryPath) -> "BIDSPipelineTree":
-        """
-        Load pipeline tree from a directory.
-        """
-        dirpath: PosixPath = Path(dirpath)
-        dataset_description: DatasetDescription = DatasetDescription.from_file(dirpath / "dataset_description.json")
-        with open(dirpath / "README", "r") as f:
-            readme_text: str = f.read()
-        with open(dirpath / "CITATION", "r") as f:
-            citation_text: str = f.read()
-        with open(dirpath / "CHANGES", "r") as f:
-            changes_text: str = f.read()
-        with open(dirpath / "LICENSE", "r") as f:
-            license_text: str = f.read()
-        return cls(
-            dataset_description=dataset_description,
-            readme_text=readme_text,
-            citation_text=citation_text,
-            changes_text=changes_text,
-            license_text=license_text
-        )
-    
-    def to_dict(self) -> dict:
-        """
-        Convert the pipeline tree to a dictionary.
-        """
-        return {
-            "dataset_description": self.dataset_description.model_dump(mode="json"),
-            "readme_text": self.readme_text,
-            "citation_text": self.citation_text,
-            "changes_text": self.changes_text,
-            "license_text": self.license_text
-        }
-    
-    def set_default_values(self, name: str):
-        if not self.dataset_description:
-            self.dataset_description = DatasetDescription(Name=name)
-        if not self.readme_text:
-            self.readme_text = f"# {name} Pipeline\n\n"
-        if not self.citation_text:
-            self.citation_text = f"# {name}\n\n"
-        if not self.changes_text:
-            self.changes_text = f"# {name}\n\n"
-        if not self.license_text:
-            self.license_text = f"# {name}\n\n"
-
 class BIDSPipeline(BaseModel):
     """
     Pipeline dataset in BIDS-format generated from original BIDS dataset.
@@ -121,7 +64,7 @@ class BIDSPipeline(BaseModel):
     name: str = Field(title="Pipeline name", description="Name of the pipeline")
     description: Optional[str] = Field(title="Description", description="Description of the pipeline", default=None)
     bids_root: DirectoryPath = Field(title="BIDS root directory", description="Root directory of the BIDS dataset")
-    tree: BIDSPipelineTree = Field(title="Pipeline tree", description="Pipeline tree")
+    tree: BIDSTree = Field(title="Pipeline tree", description="Pipeline tree")
     # bids_filters: dict = Field(title="BIDS filters", description="BIDS filters", default={})
     processes: list[BIDSProcess] = Field(title="Processes", description="Processes in the pipeline", default=[])
     # is_chain: bool = Field(title="Is chain", description="Is the pipeline a chain of processes", default=False)
@@ -133,7 +76,7 @@ class BIDSPipeline(BaseModel):
         Create a BIDSPipeline object from a BIDS root directory.
         """
         bids_root: PosixPath = Path(bids_root)
-        tree: BIDSPipelineTree = BIDSPipelineTree.from_path(bids_root / "derivatives" / name)
+        tree: BIDSTree = BIDSTree.from_path(bids_root / "derivatives" / name)
         return cls(name=name, bids_root=bids_root, tree=tree)
     
     def create_tree(self):
@@ -147,16 +90,7 @@ class BIDSPipeline(BaseModel):
         
         derivatives_dir.mkdir(parents=True, exist_ok=True)
         self.tree.set_default_values(self.name)
-        with open(derivatives_dir / "dataset_description.json", "w") as f:
-            f.write(self.tree.dataset_description.model_dump_json(indent=4))
-        with open(derivatives_dir / "README", "w") as f:
-            f.write(self.tree.readme_text)
-        with open(derivatives_dir / "CITATION", "w") as f:
-            f.write(self.tree.citation_text)
-        with open(derivatives_dir / "CHANGES", "w") as f:
-            f.write(self.tree.changes_text)
-        with open(derivatives_dir / "LICENSE", "w") as f:
-            f.write(self.tree.license_text)        
+        self.tree.create(derivatives_dir)
     
     def add_process(self, process: BIDSProcess):
         """
