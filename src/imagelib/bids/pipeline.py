@@ -5,12 +5,13 @@ Code related to BIDS pipelines.
 
 from ..datasets.bids import DatasetDescription, GeneratedBy, BIDSTree
 from ..helpers.data import clean_dict_values
-from .processes.base import BIDSProcess, BIDSProcessResults
+from ..helpers.generate import generate_id
+from .processes.base import BIDSProcess, BIDSProcessResults, BIDSProcessExec
 
 from pathlib import Path, PosixPath
 from typing import Optional, Any
 from collections.abc import Callable
-import json
+import json, os
 from copy import deepcopy
 
 from bids import BIDSLayout
@@ -61,15 +62,12 @@ class BIDSPipeline(BaseModel):
     """
     Pipeline dataset in BIDS-format generated from original BIDS dataset.
     """
+    id: str = Field(title="ID. The unique identifier of the pipeline.", default_factory=lambda: generate_id("PL", 10, "-"))
     name: str = Field(title="Pipeline name", description="Name of the pipeline")
     description: Optional[str] = Field(title="Description", description="Description of the pipeline", default=None)
-    bids_root: DirectoryPath = Field(title="BIDS root directory", description="Root directory of the BIDS dataset")
-    tree: BIDSTree = Field(title="Pipeline tree", description="Pipeline tree")
-    # bids_filters: dict = Field(title="BIDS filters", description="BIDS filters", default={})
-    processes: list[BIDSProcess] = Field(title="Processes", description="Processes in the pipeline", default=[])
-    # is_chain: bool = Field(title="Is chain", description="Is the pipeline a chain of processes", default=False)
-    overwrite_files: bool = Field(title="Overwrite files", description="Overwrite files if they already exist", default=False)
-            
+    process_execs: list[BIDSProcessExec] = Field(title="Process executions.", description="Process executions in the pipeline", default=[])
+    overwrite: bool = Field(title="Overwrite files", description="Overwrite files if they already exist", default=False)
+    
     @classmethod
     def from_path(cls, name: str, bids_root: str | DirectoryPath) -> "BIDSPipeline":
         """
@@ -79,53 +77,54 @@ class BIDSPipeline(BaseModel):
         tree: BIDSTree = BIDSTree.from_path(bids_root / "derivatives" / name)
         return cls(name=name, bids_root=bids_root, tree=tree)
     
-    def create_tree(self):
+    def set_values_from_env(self):
         """
-        Create the pipeline tree.
+        Set values from environment variables.
         """
-        derivatives_dir: PosixPath = self.bids_root / "derivatives" / self.name
-        if derivatives_dir.exists():
-            print(f"Directory {derivatives_dir} already exists. Skipping creation.")
-            return
-        
-        derivatives_dir.mkdir(parents=True, exist_ok=True)
-        self.tree.set_default_values(self.name)
-        self.tree.create(derivatives_dir)
+        self.id = os.getenv("PIPELINE_ID", self.id)
+        self.pipeline_name = os.getenv("PIPELINE_NAME", self.name)
+        self.overwrite = os.getenv("OVERWRITE", self.overwrite)
     
-    def add_process(self, process: BIDSProcess):
+    def create_trees(self):
         """
-        Add a process to the pipeline.
+        Create the pipeline trees.
         """
-        self.processes.append(process)
+        all_bids_roots: list[PosixPath] = []
+        for process_exec in self.process_execs:
+            bids_roots: list[PosixPath] = process_exec.bids_roots
+            for bids_root in bids_roots:
+                if bids_root not in all_bids_roots:
+                    all_bids_roots.append(bids_root)
+                    
+        for bids_root in all_bids_roots:
+            bids_root: PosixPath = Path(bids_root)
+            tree: BIDSTree = BIDSTree()
+            tree.set_default_values(self.name)
+            tree.create(bids_root / "derivatives" / self.name)
+    
+    def add_process_exec(self, process_exec: BIDSProcessExec):
+        """
+        Add a process execution to the pipeline.
+        """
+        self.process_execs.append(process_exec)
         
     def execute(self):
         """
         Execute the pipeline.
         """
-        for process in self.processes:
-            bids_filters: dict = deepcopy(process.bids_filters)
-            if "return_type" not in bids_filters or not bids_filters["return_type"]:
-                bids_filters["return_type"] = "file"
-            layout: BIDSLayout = BIDSLayout(self.bids_root, derivatives=True)
-            filepaths: list[str] = layout.get(**bids_filters)
-            # print(f"Executing {process.name} using BIDS filters: {bids_filters} on {len(filepaths)} files.")
-            process.kwargs["layout"] = layout
-            process.kwargs["pipeline_name"] = self.name
-            process.kwargs["overwrite"] = self.overwrite_files
-            for filepath in track(filepaths, description=f"Processing {process.name} using BIDS filters: {bids_filters} on {len(filepaths)} files"):
-                process.kwargs["input_filepath"] = filepath
-                process.execute()
-    
+        for process_exec in self.process_execs:
+            process_exec.execute()
+            
     def to_dict(self) -> dict:
         """
         Convert the pipeline to a dictionary.
         """
         return {
+            "id": self.id,
             "name": self.name,
-            "bids_root": str(self.bids_root),
-            "tree": self.tree.model_dump(mode="json"),
-            # "bids_filters": self.bids_filters,
-            "processes": [process.to_dict() for process in self.processes],
+            "description": self.description,
+            "process_execs": [process_exec.to_dict() for process_exec in self.process_execs],
+            "overwrite": self.overwrite
         }
         
     def export_to_json(self) -> None:

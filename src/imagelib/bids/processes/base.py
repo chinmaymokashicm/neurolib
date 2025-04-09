@@ -1,48 +1,194 @@
-from typing import Optional, Any, Callable
+from ...helpers.generate import generate_id
+
+from typing import Optional, Any, Callable, Protocol
 from pathlib import Path, PosixPath
-import functools, traceback, json
+import functools, traceback, json, os
+from copy import deepcopy
 
 from pydantic import BaseModel, Field, field_validator
 from bids import BIDSLayout
 
+class BIDSProcessLogicCallable(Protocol):
+    def __call__(
+        self,
+        input_filepath: str | PosixPath,
+        layout: BIDSLayout,
+        pipeline_name: str,
+        overwrite: bool = False,
+        process_id: Optional[str] = None,
+        process_exec_id: Optional[str] = None,
+        pipeline_id: Optional[str] = None,
+    ) -> None:
+        """
+        Process the input file using the provided arguments.
+        Args:
+            input_filepath (str | PosixPath): Path to the input file.
+            layout (BIDSLayout): BIDS layout object.
+            pipeline_name (str): Name of the pipeline.
+            overwrite (bool): Whether to overwrite existing outputs. Default is False.
+            process_id (Optional[str]): ID of the process. Default is None.
+            process_exec_id (Optional[str]): Execution ID of the process. Default is None.
+            pipeline_id (Optional[str]): ID of the pipeline. Default is None.
+        Returns:
+            None
+        """
+        ...
+
 class BIDSProcess(BaseModel):
     """
-    Define a process in the BIDS pipeline.
+    Define a unitary process in the BIDS pipeline.
     """
+    id: str = Field(title="ID. The unique identifier of the process image.", default_factory=lambda: generate_id("PR", 10, "-"))
     name: str = Field(title="Name", description="Name of the process")
     description: Optional[str] = Field(title="Description", description="Description of the process", default=None)
-    logic: Callable = Field(title="Logic", description="Logic of the process. A callable object.")
-    bids_filters: dict = Field(title="BIDS filters", description="BIDS filters to apply to the input files", default={})
-    kwargs: dict = Field(title="Keyword arguments", description="Keyword arguments for the process", default={})
-    
-    def execute(self) -> Optional[str]:
-        """
-        Execute the process.
-        """
-        return self.logic(**self.kwargs)
+    logic: BIDSProcessLogicCallable = Field(title="Logic", description="Logic of the process. A callable object.")
     
     def to_dict(self) -> dict:
         """
         Convert the process to a dictionary.
         """
-        kwargs: dict = {}
-        for key, value in self.kwargs.items():
-            if isinstance(value, PosixPath):
-                value = str(value)
-            elif isinstance(value, BIDSLayout):
-                value = value.root
-            kwargs[key] = value
         return {
             "name": self.name,
             "description": self.description,
-            "kwargs": kwargs
+            "logic": getattr(self.logic, "__doc__", "Function description not available. Update the docstring."),
         }
     
-    def set_input_filepaths(self, layout: BIDSLayout, bids_filters: dict):
+    def set_id_from_env(self):
         """
-        Set the input filepaths for the process.
+        Set the process ID from environment variables.
         """
-        self.input_filepaths = layout.get(return_type="file", **bids_filters)
+        self.id = os.getenv("PROCESS_ID", self.id)
+
+class BIDSProcessExec(BaseModel):
+    """
+    Define a process execution in the BIDS pipeline.
+    Add I/O metadata to the BIDSProcess.
+    """
+    id: str = Field(title="ID. The unique identifier of the process execution.", default_factory=lambda: generate_id("PE", 10, "-"))
+    process: BIDSProcess = Field(title="Process", description="Process to be executed")
+    bids_roots: list[PosixPath] = Field(title="BIDS roots", description="List of BIDS root directories")
+    bids_filters: dict = Field(title="BIDS filters", description="BIDS filters to apply to the input files", default={})
+    pipeline_name: Optional[str] = Field(title="Pipeline name", description="Name of the pipeline", default=None)
+    overwrite: bool = Field(title="Overwrite", description="Overwrite existing files", default=False)
+    pipeline_id: Optional[str] = Field(title="Pipeline ID", description="Unique identifier for the pipeline", default=None)
+    extra_kwargs: dict = Field(title="Extra keyword arguments", description="Extra keyword arguments for the process", default={})
+    
+    @field_validator("bids_roots", mode="after")
+    def check_bids_roots(cls, val: list[PosixPath]) -> list[PosixPath]:
+        if not val:
+            raise ValueError("BIDS roots cannot be empty.")
+        for root in val:
+            if not isinstance(root, PosixPath):
+                raise ValueError("BIDS roots must be PosixPath objects.")
+            BIDSLayout(root, derivatives=True)
+        return val
+    
+    def set_values_from_env(self):
+        """
+        Set the pipeline name and overwrite values from environment variables.
+        """
+        self.id = os.getenv("PROCESS_EXEC_ID", self.id)
+        if os.environ("BIDS_FILTERS") is not None:
+            self.bids_filters = json.loads(os.getenv("BIDS_FILTERS"))
+    
+    def get_layout_filepaths(self) -> dict[str, list[str]]:
+        """
+        Get the filepaths for each BIDS layout for the process execution.
+        """
+        layout_filepaths: dict[str, list[str]] = {}
+        for root in self.bids_roots:
+            layout: BIDSLayout = BIDSLayout(root, derivatives=True)
+            layout_filepaths[root] = layout.get(return_type="file", **self.bids_filters)
+        return layout_filepaths
+    
+    def __get_execution_plan(self, pipeline_id: Optional[str] = None) -> dict[str, list[str]]:
+        """
+        Get the execution plan for the process execution.
+        """
+        layout_filepaths: dict[str, list[str]] = self.get_layout_filepaths()
+        execution_plan: dict = {}
+        for root, filepaths in layout_filepaths.items():
+            execution_plan[root] = {}
+            for filepath in filepaths:
+                execution_plan[root][filepath] = {
+                    "input_filepath": filepath,
+                    "layout": BIDSLayout(root, derivatives=True),
+                    "pipeline_name": self.pipeline_name,
+                    "overwrite": self.overwrite,
+                    "process_id": self.process.id,
+                    "process_exec_id": self.id,
+                    "pipeline_id": pipeline_id if pipeline_id else self.pipeline_id,
+                }
+                execution_plan[root][filepath].update(self.extra_kwargs)
+        return execution_plan
+    
+    def execute(self) -> None:
+        """
+        Execute the process.
+        """
+        execution_plan: dict[str, list[str]] = self.__get_execution_plan()
+        for filepath_kwargs in execution_plan.values():
+            for filepath, kwargs in filepath_kwargs.items():
+                try:
+                    self.process.logic(**kwargs)
+                except Exception as e:
+                    error_message: str = traceback.format_exc()
+                    print(f"Error processing {filepath} with {self.process.name}: {e}", "\n", error_message)
+                    
+    def to_dict(self) -> dict:
+        """
+        Convert the process execution to a dictionary.
+        """
+        return {
+            "id": self.id,
+            "process": self.process.to_dict(),
+            "bids_roots": [str(root) for root in self.bids_roots],
+            "bids_filters": self.bids_filters,
+            "pipeline_name": self.pipeline_name,
+            "overwrite": self.overwrite,
+            "pipeline_id": self.pipeline_id,
+            "extra_kwargs": self.extra_kwargs,
+        }
+
+
+# class BIDSProcess(BaseModel):
+#     """
+#     Define a process in the BIDS pipeline.
+#     """
+#     name: str = Field(title="Name", description="Name of the process")
+#     description: Optional[str] = Field(title="Description", description="Description of the process", default=None)
+#     logic: Callable = Field(title="Logic", description="Logic of the process. A callable object.")
+#     bids_filters: dict = Field(title="BIDS filters", description="BIDS filters to apply to the input files", default={})
+#     kwargs: dict = Field(title="Keyword arguments", description="Keyword arguments for the process", default={})
+    
+#     def execute(self) -> Optional[str]:
+#         """
+#         Execute the process.
+#         """
+#         return self.logic(**self.kwargs)
+    
+#     def to_dict(self) -> dict:
+#         """
+#         Convert the process to a dictionary.
+#         """
+#         kwargs: dict = {}
+#         for key, value in self.kwargs.items():
+#             if isinstance(value, PosixPath):
+#                 value = str(value)
+#             elif isinstance(value, BIDSLayout):
+#                 value = value.root
+#             kwargs[key] = value
+#         return {
+#             "name": self.name,
+#             "description": self.description,
+#             "kwargs": kwargs
+#         }
+    
+#     def set_input_filepaths(self, layout: BIDSLayout, bids_filters: dict):
+#         """
+#         Set the input filepaths for the process.
+#         """
+#         self.input_filepaths = layout.get(return_type="file", **bids_filters)
 
 class BIDSProcessSummarySidecar(BaseModel):
     """
@@ -63,7 +209,7 @@ class BIDSProcessSummarySidecar(BaseModel):
     steps: list[str | dict] = Field(title="Steps", description="Steps in the process", default=[])
     metrics: list[dict[str, Any]] = Field(title="Metrics", description="Metrics of the process", default=[])
     error: Optional[str] = Field(title="Error", description="Error message", default=None)
-    
+
     @field_validator("name", mode="after")
     def remove_extension(cls, name):
         name: str = name.split(".")[0]
