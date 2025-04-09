@@ -77,7 +77,7 @@ class BIDSProcessExec(BaseModel):
     id: str = Field(title="ID. The unique identifier of the process execution.", default_factory=lambda: generate_id("PE", 10, "-"))
     process: BIDSProcess = Field(title="Process", description="Process to be executed")
     bids_roots: list[PosixPath] = Field(title="BIDS roots", description="List of BIDS root directories")
-    bids_filters: dict = Field(title="BIDS filters", description="BIDS filters to apply to the input files", default={})
+    bids_filters: dict = Field(title="BIDS filters", description="BIDS filters to apply to the input files", default_factory=dict)
     pipeline_name: Optional[str] = Field(title="Pipeline name", description="Name of the pipeline", default=None)
     overwrite: bool = Field(title="Overwrite", description="Overwrite existing files", default=False)
     pipeline_id: Optional[str] = Field(title="Pipeline ID", description="Unique identifier for the pipeline", default=None)
@@ -94,10 +94,12 @@ class BIDSProcessExec(BaseModel):
         return val
     
     @classmethod
-    def quick_create(cls, logic: Callable, bids_roots: list[PosixPath], bids_filters: dict, extra_kwargs: Optional[dict] = None) -> "BIDSProcessExec":
+    def quick_create(cls, logic: Callable, bids_roots: list[PosixPath], bids_filters: Optional[dict] = {}, extra_kwargs: Optional[dict] = None) -> "BIDSProcessExec":
         """
         Quick create a BIDSProcessExec object. Purpose is to create a process execution object with low redundancy and high readability.
         """
+        if bids_filters is None:
+            bids_filters = {}
         if extra_kwargs is None:
             extra_kwargs = {}
         process: BIDSProcess = BIDSProcess(
