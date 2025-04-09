@@ -1,10 +1,10 @@
 """
 Unitary BIDS processes for segmentation pipelines.
 """
-from ..pipeline import get_new_pipeline_derived_filename
-from .constants import *
-from .base import BIDSProcessSummarySidecar, BIDSProcessResults
-from .helper import merge_prob_maps, convert_nibabel_to_ants, convert_ants_to_nibabel, extract_channels_from_merged_nifti
+from ..bids.pipeline import get_new_pipeline_derived_filename
+from ..bids.processes.constants import *
+from ..bids.processes.base import BIDSProcessSummarySidecar, BIDSProcessResults
+from ..bids.processes.helper import merge_prob_maps, convert_nibabel_to_ants, convert_ants_to_nibabel, extract_channels_from_merged_nifti
 
 from pathlib import Path, PosixPath
 from typing import Optional

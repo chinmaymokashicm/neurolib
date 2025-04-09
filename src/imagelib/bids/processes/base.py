@@ -5,7 +5,7 @@ from pathlib import Path, PosixPath
 import functools, traceback, json, os
 from copy import deepcopy
 
-from pydantic import BaseModel, Field, field_validator, ConfigDict
+from pydantic import BaseModel, Field, field_validator
 from bids import BIDSLayout
 
 class BIDSProcessLogicCallable(Protocol):
@@ -38,12 +38,17 @@ class BIDSProcess(BaseModel):
     """
     Define a unitary process in the BIDS pipeline.
     """
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-    
     id: str = Field(title="ID. The unique identifier of the process image.", default_factory=lambda: generate_id("PR", 10, "-"))
     name: str = Field(title="Name", description="Name of the process")
     description: Optional[str] = Field(title="Description", description="Description of the process", default=None)
-    logic: BIDSProcessLogicCallable = Field(title="Logic", description="Logic of the process. A callable object.")
+    logic: Callable = Field(title="Logic", description="Logic of the process. A callable object.")
+    
+    @field_validator("logic", mode="after")
+    def check_logic(cls, val: Callable) -> Callable:
+        if not callable(val):
+            raise ValueError("Logic must be a callable object.")
+        if not isinstance(val, BIDSProcessLogicCallable):
+            raise ValueError("Logic must be a callable object with the correct signature.")
     
     def to_dict(self) -> dict:
         """

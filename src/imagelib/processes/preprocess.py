@@ -1,10 +1,10 @@
 """
 Unitary processes for preprocessing pipelines. 
 """
-from ..pipeline import get_new_pipeline_derived_filename
-from .constants import *
-from .base import BIDSProcessSummarySidecar, BIDSProcessResults
-from ...helpers.data import clean_dict_from_numpy
+from ..bids.pipeline import get_new_pipeline_derived_filename
+from ..bids.processes.constants import *
+from ..bids.processes.base import BIDSProcessSummarySidecar, BIDSProcessResults
+from ..helpers.data import clean_dict_from_numpy
 
 from pathlib import Path, PosixPath
 from typing import Optional
