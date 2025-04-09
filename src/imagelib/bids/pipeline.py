@@ -65,7 +65,7 @@ class BIDSPipeline(BaseModel):
     id: str = Field(title="ID. The unique identifier of the pipeline.", default_factory=lambda: generate_id("PL", 10, "-"))
     name: str = Field(title="Pipeline name", description="Name of the pipeline")
     description: Optional[str] = Field(title="Description", description="Description of the pipeline", default=None)
-    process_execs: list[BIDSProcessExec] = Field(title="Process executions.", description="Process executions in the pipeline", default=[])
+    process_execs: list[BIDSProcessExec] = Field(title="Process executions.", description="Process executions in the pipeline", default_factory=list)
     overwrite: bool = Field(title="Overwrite files", description="Overwrite files if they already exist", default=False)
     
     @classmethod
@@ -113,6 +113,9 @@ class BIDSPipeline(BaseModel):
         Execute the pipeline.
         """
         for process_exec in self.process_execs:
+            print(f"Executing {process_exec.process.name}...")
+            process_exec.pipeline_id = self.id
+            process_exec.pipeline_name = self.name
             process_exec.execute()
             
     def to_dict(self) -> dict:

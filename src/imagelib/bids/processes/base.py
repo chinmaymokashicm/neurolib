@@ -1,13 +1,15 @@
 from ...helpers.generate import generate_id
 
-from typing import Optional, Any, Callable, Protocol
+from typing import Optional, Any, Callable, Protocol, runtime_checkable
 from pathlib import Path, PosixPath
 import functools, traceback, json, os
 from copy import deepcopy
 
 from pydantic import BaseModel, Field, field_validator
 from bids import BIDSLayout
+from rich.progress import track
 
+@runtime_checkable
 class BIDSProcessLogicCallable(Protocol):
     def __call__(
         self,
@@ -49,6 +51,7 @@ class BIDSProcess(BaseModel):
             raise ValueError("Logic must be a callable object.")
         if not isinstance(val, BIDSProcessLogicCallable):
             raise ValueError("Logic must be a callable object with the correct signature.")
+        return val
     
     def to_dict(self) -> dict:
         """
@@ -90,6 +93,25 @@ class BIDSProcessExec(BaseModel):
             BIDSLayout(root, derivatives=True)
         return val
     
+    @classmethod
+    def quick_create(cls, logic: Callable, bids_roots: list[PosixPath], bids_filters: dict, extra_kwargs: Optional[dict] = None) -> "BIDSProcessExec":
+        """
+        Quick create a BIDSProcessExec object. Purpose is to create a process execution object with low redundancy and high readability.
+        """
+        if extra_kwargs is None:
+            extra_kwargs = {}
+        process: BIDSProcess = BIDSProcess(
+            name=logic.__name__,
+            description=getattr(logic, "__doc__", "Function description not available. Update the docstring."),
+            logic=logic,
+        )
+        return cls(
+            process=process,
+            bids_roots=bids_roots,
+            bids_filters=bids_filters,
+            extra_kwargs=extra_kwargs
+        )
+    
     def set_values_from_env(self):
         """
         Set the pipeline name and overwrite values from environment variables.
@@ -124,7 +146,7 @@ class BIDSProcessExec(BaseModel):
                     "overwrite": self.overwrite,
                     "process_id": self.process.id,
                     "process_exec_id": self.id,
-                    "pipeline_id": pipeline_id if pipeline_id else self.pipeline_id,
+                    "pipeline_id": pipeline_id if pipeline_id is not None else self.pipeline_id,
                 }
                 execution_plan[root][filepath].update(self.extra_kwargs)
         return execution_plan
@@ -133,9 +155,13 @@ class BIDSProcessExec(BaseModel):
         """
         Execute the process.
         """
+        # Check if pipeline_name is set
+        if self.pipeline_name is None:
+            raise ValueError("Pipeline name must be set before executing the process.")
+        
         execution_plan: dict[str, list[str]] = self.__get_execution_plan()
-        for filepath_kwargs in execution_plan.values():
-            for filepath, kwargs in filepath_kwargs.items():
+        for root_dir, filepath_kwargs in execution_plan.items():
+            for filepath, kwargs in track(filepath_kwargs.items(), description=f"Processing {self.process.name} on {len(filepath_kwargs)} files on {root_dir}"):
                 try:
                     self.process.logic(**kwargs)
                 except Exception as e:
