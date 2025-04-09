@@ -5,7 +5,7 @@ from pathlib import Path, PosixPath
 import functools, traceback, json, os
 from copy import deepcopy
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 from bids import BIDSLayout
 
 class BIDSProcessLogicCallable(Protocol):
@@ -38,6 +38,8 @@ class BIDSProcess(BaseModel):
     """
     Define a unitary process in the BIDS pipeline.
     """
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    
     id: str = Field(title="ID. The unique identifier of the process image.", default_factory=lambda: generate_id("PR", 10, "-"))
     name: str = Field(title="Name", description="Name of the process")
     description: Optional[str] = Field(title="Description", description="Description of the process", default=None)
