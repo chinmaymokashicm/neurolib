@@ -8,6 +8,7 @@ from ..bids.processes.helper import merge_prob_maps, convert_nibabel_to_ants, co
 
 from pathlib import Path, PosixPath
 from typing import Optional
+import logging
 
 import ants
 from antspynet.utilities import deep_atropos, desikan_killiany_tourville_labeling
@@ -19,6 +20,8 @@ import nibabel as nib
 from nilearn.datasets import fetch_atlas_harvard_oxford
 from nilearn.image import resample_to_img, load_img
 from nilearn.input_data import NiftiLabelsMasker
+
+logger = logging.getLogger(__name__)
 
 @BIDSProcessSummarySidecar.execute_process
 def atropos_tissue_segmentation(input_filepath: str | PosixPath, layout: BIDSLayout, pipeline_name: str, overwrite: bool = False, process_id: Optional[str] = None,  process_exec_id: Optional[str] = None,pipeline_id: Optional[str] = None) -> Optional[BIDSProcessSummarySidecar]:
@@ -55,12 +58,12 @@ def atropos_tissue_segmentation(input_filepath: str | PosixPath, layout: BIDSLay
     try:
         input_filepath = layout.get(return_type="file", **input_filepath_entities)[0]
     except IndexError:
-        print(f"Could not find MNI-registered file for {input_filepath}. Skipping.")
+        logger.error(f"Could not find MNI-registered file for {input_filepath}. Skipping.")
     
     suffix: str = "seg"
     tissue_segment_path: str = get_new_pipeline_derived_filename(input_filepath, layout, pipeline_name, BIDS_DESC_ENTITY_TISSUE_SEGMENT, ".nii.gz", suffix=suffix)
     if not overwrite and Path(tissue_segment_path).exists():
-        print(f"File {tissue_segment_path} already exists. Skipping.")
+        logger.error(f"File {tissue_segment_path} already exists. Skipping.")
         return None
     input_nii: ants.ANTsImage = ants.image_read(input_filepath)
     input_mask_entities: dict = parse_file_entities(input_filepath)
@@ -92,8 +95,8 @@ def atropos_tissue_segmentation(input_filepath: str | PosixPath, layout: BIDSLay
             label_stats: dict = df_label_stats[df_label_stats["LabelValue"] == 1.0].to_dict(orient="records")[0]
             label_stats_all.append({region_name: label_stats})
         except Exception as e:
-            # print(f"Failed to calculate label stats for {segment} in {input_filepath}: {e}")
-            print(f"Failed to calculate label stats for {input_filepath}: {e}")
+            # logger.error(f"Failed to calculate label stats for {segment} in {input_filepath}: {e}")
+            logger.error(f"Failed to calculate label stats for {input_filepath}: {e}")
     
     return BIDSProcessResults(
         process_id=process_id,
@@ -141,12 +144,12 @@ def deep_atropos_tissue_segmentation(input_filepath: str | PosixPath, layout: BI
     try:
         input_filepath = layout.get(return_type="file", **input_filepath_entities)[0]
     except IndexError:
-        print(f"Could not find brain extracted file for {input_filepath}. Skipping.")
+        logger.error(f"Could not find brain extracted file for {input_filepath}. Skipping.")
     
     suffix: str = "deepseg"
     tissue_segment_path: str = get_new_pipeline_derived_filename(input_filepath, layout, pipeline_name, BIDS_DESC_ENTITY_TISSUE_SEGMENT, ".nii.gz", suffix=suffix)
     if not overwrite and Path(tissue_segment_path).exists():
-        print(f"File {tissue_segment_path} already exists. Skipping.")
+        logger.error(f"File {tissue_segment_path} already exists. Skipping.")
         return None
     input_nii: ants.ANTsImage = ants.image_read(input_filepath)
     deep_atropos_output = deep_atropos(input_nii, do_preprocessing=False)
@@ -167,8 +170,8 @@ def deep_atropos_tissue_segmentation(input_filepath: str | PosixPath, layout: BI
             label_stats: dict = df_label_stats[df_label_stats["LabelValue"] == 1.0].to_dict(orient="records")[0]
             label_stats_all.append(label_stats)
         except Exception as e:
-            # print(f"Failed to calculate label stats for {segment} in {input_filepath}: {e}")
-            print(f"Failed to calculate label stats for {input_filepath}: {e}")
+            # logger.error(f"Failed to calculate label stats for {segment} in {input_filepath}: {e}")
+            logger.error(f"Failed to calculate label stats for {input_filepath}: {e}")
             
     return BIDSProcessResults(
         process_id=process_id,
@@ -217,12 +220,12 @@ def brain_parcellation_harvard_oxford_nilearn(input_filepath: str | PosixPath, l
     try:
         input_filepath = layout.get(return_type="file", **input_filepath_entities)[0]
     except IndexError:
-        print(f"Could not find brain extracted file for {input_filepath}. Skipping.")
+        logger.error(f"Could not find brain extracted file for {input_filepath}. Skipping.")
     
     suffix: str = "label"
     parcellation_path: str = get_new_pipeline_derived_filename(input_filepath, layout, pipeline_name, BIDS_DESC_ENTITY_PARCELLATION_HARVARD_OXFORD, ".nii.gz", suffix=suffix)
     if not overwrite and Path(parcellation_path).exists():
-        print(f"File {parcellation_path} already exists. Skipping.")
+        logger.error(f"File {parcellation_path} already exists. Skipping.")
         return None
     input_nii: nib.Nifti1Image = load_img(input_filepath)
     atlas = fetch_atlas_harvard_oxford(atlas_spec)
@@ -295,12 +298,12 @@ def brain_parcellation_desikan_killiany_tourville(input_filepath: str | PosixPat
     try:
         input_filepath = layout.get(return_type="file", **input_filepath_entities)[0]
     except IndexError:
-        print(f"Could not find brain extracted file for {input_filepath}. Skipping.")
+        logger.error(f"Could not find brain extracted file for {input_filepath}. Skipping.")
     
     suffix: str = "label"
     parcellation_path: str = get_new_pipeline_derived_filename(input_filepath, layout, pipeline_name, BIDS_DESC_ENTITY_PARCELLATION_DKT, ".nii.gz", suffix=suffix)
     if not overwrite and Path(parcellation_path).exists():
-        print(f"File {parcellation_path} already exists. Skipping.")
+        logger.error(f"File {parcellation_path} already exists. Skipping.")
         return None
     input_nii: ants.ANTsImage = ants.image_read(input_filepath)
     parc: ants.ANTsImage = desikan_killiany_tourville_labeling(input_nii, do_preprocessing=False, return_probability_images=False, do_lobar_parcellation=False)
@@ -362,12 +365,12 @@ def kelly_kapowski_cortical_thickness(input_filepath: str | PosixPath, layout: B
     try:
         input_filepath = layout.get(return_type="file", **input_filepath_entities)[0]
     except IndexError:
-        print(f"Could not find tissue segmentation file for {input_filepath}. Skipping.")
+        logger.error(f"Could not find tissue segmentation file for {input_filepath}. Skipping.")
     
     suffix: str = "thick"
     cortical_thickness_path: str = get_new_pipeline_derived_filename(input_filepath, layout, pipeline_name, BIDS_DESC_ENTITY_CORTICAL_THICKNESS, ".nii.gz", suffix=suffix)
     if not overwrite and Path(cortical_thickness_path).exists():
-        print(f"File {cortical_thickness_path} already exists. Skipping.")
+        logger.error(f"File {cortical_thickness_path} already exists. Skipping.")
         return None
     
     segment_nii: nib.Nifti1Image = load_img(input_filepath)

@@ -7,11 +7,14 @@ from ..bids.processes.base import BIDSProcessSummarySidecar, BIDSProcessResults
 from ..helpers.data import clean_dict_from_numpy
 
 from pathlib import Path, PosixPath
+import logging
 from typing import Optional
 
 import ants
 from antspynet.utilities import brain_extraction
 from bids import BIDSLayout
+
+logger = logging.getLogger(__name__)
 
 @BIDSProcessSummarySidecar.execute_process
 def registration_to_mni(input_filepath: str | PosixPath, layout: BIDSLayout, pipeline_name: str, mni_template_path: str, overwrite: bool = False, process_id: Optional[str] = None, process_exec_id: Optional[str] = None, pipeline_id: Optional[str] = None) -> Optional[BIDSProcessResults]:
@@ -37,7 +40,7 @@ def registration_to_mni(input_filepath: str | PosixPath, layout: BIDSLayout, pip
     suffix: str = "T1w"
     mni_warped_path: str = get_new_pipeline_derived_filename(input_filepath, layout, pipeline_name, BIDS_DESC_ENTITY_MNI152, ".nii.gz", suffix=suffix)
     if not overwrite and Path(mni_warped_path).exists():
-        print(f"File {mni_warped_path} already exists. Skipping.")
+        logger.error(f"File {mni_warped_path} already exists. Skipping.")
         return None
     input_nii: ants.ANTsImage = ants.image_read(input_filepath)
     mni_template: ants.ANTsImage = ants.image_read(mni_template_path)
@@ -98,7 +101,7 @@ def n4_bias_field_correction(input_filepath: str | PosixPath, layout: BIDSLayout
     CONVERGENCE: dict = {'iters': [50, 50, 30, 20], 'tol': 1e-7}
     n4_bfc_path = get_new_pipeline_derived_filename(input_filepath, layout, pipeline_name, BIDS_DESC_ENTITY_N4BFC, ".nii.gz", suffix=suffix)
     if not overwrite and Path(n4_bfc_path).exists():
-        print(f"File {n4_bfc_path} already exists. Skipping.")
+        logger.error(f"File {n4_bfc_path} already exists. Skipping.")
         return None
     input_nii: ants.ANTsImage = ants.image_read(input_filepath)
     
@@ -143,7 +146,7 @@ def brain_extraction_antspynet(input_filepath: str | PosixPath, layout: BIDSLayo
     suffix: str = "T1w"
     brain_extract_path = get_new_pipeline_derived_filename(input_filepath, layout, pipeline_name, BIDS_DESC_ENTITY_BRAIN_EXTRACT, ".nii.gz", suffix=suffix)
     if not overwrite and Path(brain_extract_path).exists():
-        print(f"File {brain_extract_path} already exists. Skipping.")
+        logger.error(f"File {brain_extract_path} already exists. Skipping.")
         return None
     input_nii: ants.ANTsImage = ants.image_read(input_filepath)
     prob_brain_mask_path = get_new_pipeline_derived_filename(input_filepath, layout, pipeline_name, BIDS_DESC_ENTITY_PROB_BRAIN_MASK, ".nii.gz", suffix="mask")
