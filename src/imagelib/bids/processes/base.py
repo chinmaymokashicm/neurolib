@@ -1,4 +1,5 @@
 from ...helpers.generate import generate_id
+from ...datasets.bids import BIDSTree
 
 from typing import Optional, Any, Callable, Protocol, runtime_checkable
 from pathlib import Path, PosixPath
@@ -167,6 +168,10 @@ class BIDSProcessExec(BaseModel):
         for root_dir, filepath_kwargs in execution_plan.items():
             for filepath, kwargs in track(filepath_kwargs.items(), description=f"Processing {self.process.name} on {len(filepath_kwargs)} files on {root_dir}"):
                 try:
+                    # Create BIDS Tree if it doesn't exist
+                    tree: BIDSTree = BIDSTree()
+                    tree.set_default_values(self.pipeline_name)
+                    tree.create(root_dir / "derivatives" / self.pipeline_name)
                     self.process.logic(**kwargs)
                 except Exception as e:
                     error_message: str = traceback.format_exc()
