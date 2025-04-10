@@ -160,9 +160,11 @@ class BIDSTree(BaseModel):
         Create the pipeline tree.
         """
         dirpath: PosixPath = Path(dirpath)
-        if dirpath.exists() and not overwrite:
+        if (dirpath / "dataset_description.json").exists() and not overwrite:
             print(f"Directory {dirpath} already exists. Skipping creation.")
             return
+        if self.dataset_description is None:
+            self.set_default_values(name=dirpath.name)
         dirpath.mkdir(parents=True, exist_ok=True)
         with open(dirpath / "dataset_description.json", "w") as f:
             f.write(self.dataset_description.model_dump_json(indent=4))
@@ -175,6 +177,45 @@ class BIDSTree(BaseModel):
         with open(dirpath / "LICENSE", "w") as f:
             f.write(self.license_text)
 
+class ParticipantDemographyMetric(BaseModel):
+    """
+    Demographic metric about a participant.
+    """
+    name: str = Field(title="Name", description="Name of the metric")
+    description: Optional[str] = Field(title="Description", description="Description of the metric", default=None)
+    units: Optional[str] = Field(title="Units", description="Units of the metric", default=None)
+    value: str = Field(title="Value", description="Value of the metric")
+
+class BIDSParticipant(BaseModel):
+    """
+    Information about a participant in the BIDS dataset.
+    """
+    subject_id: str = Field(title="Subject ID", description="Subject ID")
+    demographic_metrics: list[ParticipantDemographyMetric] = Field(title="Demographic metrics", description="Demographic metrics", default_factory=list)
+    
+class BIDSParticipants(BaseModel):
+    """
+    Information about participants in the BIDS dataset.
+    """
+    participants: list[BIDSParticipant] = Field(title="Participants", description="List of participants", default_factory=list)
+    
+    @classmethod
+    def from_path(cls, path: str | PosixPath, metric_colnames: Optional[list[str]] = []) -> "BIDSParticipants":
+        """
+        Load participants information from a file.
+        """
+        df_participants: pd.DataFrame = pd.read_csv(path, sep="\t")
+        participants: list[BIDSParticipant] = []
+        if metric_colnames is None:
+            metric_colnames = [colname for colname in df_participants.columns.tolist() if colname not in ["participant_id", "scan_date", "scan_type"]]
+        for _, row in df_participants.iterrows():
+            demographic_metrics: list[ParticipantDemographyMetric] = []
+            for col in df_participants.columns:
+                if col not in metric_colnames:
+                    demographic_metrics.append(ParticipantDemographyMetric(name=col, value=row[col]))
+            participant: BIDSParticipant = BIDSParticipant(subject_id=row["participant_id"], demographic_metrics=demographic_metrics)
+            participants.append(participant)
+
 class SelectBIDSDatasetInfo(BaseModel):
     """
     Selected BIDS dataset information.
@@ -185,6 +226,7 @@ class SelectBIDSDatasetInfo(BaseModel):
     bids_files: list[BIDSFile]
     dataset_description: DatasetDescription
     derivatives: Optional[dict[str, "SelectBIDSDatasetInfo"]] = Field(title="Derivatives", description="Derivatives information", default_factory=dict)
+    participants: Optional[BIDSParticipants] = Field(title="Participants", description="Participants information", default=None)
 
     @classmethod
     def from_path(cls, path: str | DirectoryPath, get_derivatives: bool = True) -> "SelectBIDSDatasetInfo":
@@ -200,10 +242,16 @@ class SelectBIDSDatasetInfo(BaseModel):
             derivative_name: str = Path(sub_path).name
             derivative_path: DirectoryPath = bids_root / sub_path
             derivatives[derivative_name] = SelectBIDSDatasetInfo.from_path(derivative_path, get_derivatives=get_derivatives)
+        
+        if Path(bids_root / "participants.tsv").exists():
+            participants: BIDSParticipants = BIDSParticipants.from_path(bids_root / "participants.tsv")
+        
         return cls(
             bids_root=bids_root,
             bids_files=bids_files,
-            dataset_description=dataset_description
+            dataset_description=dataset_description,
+            derivatives=derivatives,
+            participants=participants
         )
         
     def to_dict(self) -> dict:
@@ -214,7 +262,8 @@ class SelectBIDSDatasetInfo(BaseModel):
             "bids_root": str(self.bids_root),
             "bids_files": [str(Path(bids_file.path).relative_to(self.bids_root)) for bids_file in self.bids_files],
             "dataset_description": self.dataset_description.model_dump(mode="json"),
-            "derivatives": {key: value.to_dict() for key, value in self.derivatives.items()}
+            "derivatives": {key: value.to_dict() for key, value in self.derivatives.items()},
+            "participants": self.participants.model_dump(mode="json") if self.participants else None
         }
         
     def to_json(self, path: str | DirectoryPath) -> None:
