@@ -129,7 +129,9 @@ class BIDSProcessExec(BaseModel):
         layout_filepaths: dict[str, list[str]] = {}
         for root in self.bids_roots:
             layout: BIDSLayout = BIDSLayout(root, derivatives=True)
-            layout_filepaths[root] = layout.get(return_type="file", **self.bids_filters)
+            bids_filters: dict = deepcopy(self.bids_filters)
+            bids_filters["return_type"] = "file"
+            layout_filepaths[root] = layout.get(bids_filters)
         return layout_filepaths
     
     def __get_execution_plan(self, pipeline_id: Optional[str] = None) -> dict[str, list[str]]:
