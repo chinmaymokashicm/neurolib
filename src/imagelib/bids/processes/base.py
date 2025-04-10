@@ -120,7 +120,7 @@ class BIDSProcessExec(BaseModel):
         Set the pipeline name and overwrite values from environment variables.
         """
         self.id = os.environ["PROCESS_EXEC_ID"]
-        self.bids_filters = os.environ["BIDS_FILTERS"]
+        self.bids_filters = json.loads(os.environ["BIDS_FILTERS"])
     
     def get_layout_filepaths(self) -> dict[str, list[str]]:
         """
