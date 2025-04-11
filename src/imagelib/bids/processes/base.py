@@ -91,7 +91,10 @@ class BIDSProcessExec(BaseModel):
         for root in val:
             if not isinstance(root, PosixPath):
                 raise ValueError("BIDS roots must be PosixPath objects.")
-            BIDSLayout(root, derivatives=True)
+            try:
+                BIDSLayout(root, derivatives=True)
+            except Exception as e:
+                raise ValueError(f"Invalid BIDS root directory: {root}. Error: {e}")
         return val
     
     @classmethod
