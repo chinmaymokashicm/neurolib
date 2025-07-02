@@ -2,16 +2,23 @@ from ...helpers.generate import generate_id
 from ...datasets.bids import BIDSTree
 
 from typing import Optional, Any, Callable, Protocol, runtime_checkable
+from typing_extensions import Self
 from pathlib import Path, PosixPath
-import functools, traceback, json, os
+import functools, traceback, json, os, logging
 from copy import deepcopy
+from enum import Enum
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from bids import BIDSLayout
 from rich.progress import track
 
+logger = logging.getLogger(__name__)
+
 @runtime_checkable
-class BIDSProcessLogicCallable(Protocol):
+class BIDSFileProcessLogicCallable(Protocol):
+    """
+    Protocol for the callable object that processes individual BIDS files.
+    """
     def __call__(
         self,
         input_filepath: str | PosixPath,
@@ -37,22 +44,41 @@ class BIDSProcessLogicCallable(Protocol):
         """
         ...
 
+class BIDSProcessTypes(Enum):
+    """
+    Enum for the types of BIDS processes.
+    """
+    PER_SCAN = "per_scan"
+    PER_DATASET = "per_dataset"
+
 class BIDSProcess(BaseModel):
     """
     Define a unitary process in the BIDS pipeline.
     """
     id: str = Field(title="ID. The unique identifier of the process image.", default_factory=lambda: generate_id("PR", 10, "-"))
+    type: BIDSProcessTypes = Field(title="Type", description="Type of the process", default=BIDSProcessTypes.PER_SCAN)
     name: str = Field(title="Name", description="Name of the process")
     description: Optional[str] = Field(title="Description", description="Description of the process", default=None)
     logic: Callable = Field(title="Logic", description="Logic of the process. A callable object.")
     
-    @field_validator("logic", mode="after")
-    def check_logic(cls, val: Callable) -> Callable:
-        if not callable(val):
+    # @field_validator("logic", mode="after")
+    # def check_logic(cls, val: Callable) -> Callable:
+    #     if not callable(val):
+    #         raise ValueError("Logic must be a callable object.")
+    #     if not isinstance(val, BIDSFileProcessLogicCallable):
+    #         raise ValueError("Logic must be a callable object with the correct signature.")
+    #     return val
+    
+    @model_validator(mode="after")
+    def check_logic(self) -> Self:
+        """
+        Validate the logic of the process.
+        """
+        if not isinstance(self.logic, Callable):
             raise ValueError("Logic must be a callable object.")
-        if not isinstance(val, BIDSProcessLogicCallable):
-            raise ValueError("Logic must be a callable object with the correct signature.")
-        return val
+        if self.type == BIDSProcessTypes.PER_SCAN and not isinstance(self.logic, BIDSFileProcessLogicCallable):
+            raise ValueError("Logic must be a callable object with the correct signature for per scan processes.")
+        return self
     
     def to_dict(self) -> dict:
         """
@@ -145,10 +171,11 @@ class BIDSProcessExec(BaseModel):
         execution_plan: dict = {}
         for root, filepaths in layout_filepaths.items():
             execution_plan[root] = {}
-            for filepath in filepaths:
+            layout: BIDSLayout = BIDSLayout(root, derivatives=True)
+            for filepath in track(filepaths, description=f"Preparing execution plan for {self.process.name} on {len(filepaths)} files on {root}"):
                 execution_plan[root][filepath] = {
                     "input_filepath": filepath,
-                    "layout": BIDSLayout(root, derivatives=True),
+                    "layout": layout,
                     "pipeline_name": self.pipeline_name,
                     "overwrite": self.overwrite,
                     "process_id": self.process.id,
@@ -177,7 +204,7 @@ class BIDSProcessExec(BaseModel):
                     self.process.logic(**kwargs)
                 except Exception as e:
                     error_message: str = traceback.format_exc()
-                    print(f"Error processing {filepath} with {self.process.name}: {e}", "\n", error_message)
+                    logger.exception(f"Error processing {filepath} with {self.process.name}: {e}", "\n", error_message)
                     
     def to_dict(self) -> dict:
         """
@@ -333,7 +360,7 @@ class BIDSProcessSummarySidecar(BaseModel):
             except Exception as e:
                 error_message: str = traceback.format_exc()
                 input_filepath: str = str(kwargs["input_filepath"])
-                print(f"Error processing {input_filepath} with {function.__name__}: {e}", "\n", error_message)
+                logger.exception(f"Error processing {input_filepath} with {function.__name__}: {e}", "\n", error_message)
         return execute
 
 class BIDSProcessResults(BaseModel):

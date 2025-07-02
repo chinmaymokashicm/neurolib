@@ -1,6 +1,7 @@
 """
 BIDS Processes that are used individual scans/files to generate region-wise summaries.
 """
+from ...processes import register
 from ...bids.pipeline import get_new_pipeline_derived_filename
 from ...bids.processes.constants import *
 from ...bids.processes.base import BIDSProcessSummarySidecar, BIDSProcessResults
@@ -152,6 +153,7 @@ def cortical_thickness_by_region(input_filepath: str | PosixPath, layout: BIDSLa
     )
     
     
+@register
 @BIDSProcessSummarySidecar.execute_process
 def tissue_segment_stats_per_region(input_filepath: str | PosixPath, layout: BIDSLayout, pipeline_name: str, overwrite: bool = False, atlas_name: ParcellationAtlas = ParcellationAtlas.HARVARD_OXFORD, process_id: Optional[str] = None, process_exec_id: Optional[str] = None, pipeline_id: Optional[str] = None) -> Optional[BIDSProcessResults]:
     """

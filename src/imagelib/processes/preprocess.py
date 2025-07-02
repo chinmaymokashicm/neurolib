@@ -1,6 +1,7 @@
 """
 Unitary processes for preprocessing pipelines. 
 """
+from ..processes import register
 from ..bids.pipeline import get_new_pipeline_derived_filename
 from ..bids.processes.constants import *
 from ..bids.processes.base import BIDSProcessSummarySidecar, BIDSProcessResults
@@ -16,6 +17,7 @@ from bids import BIDSLayout
 
 logger = logging.getLogger(__name__)
 
+@register
 @BIDSProcessSummarySidecar.execute_process
 def registration_to_mni(input_filepath: str | PosixPath, layout: BIDSLayout, pipeline_name: str, mni_template_path: str, overwrite: bool = False, process_id: Optional[str] = None, process_exec_id: Optional[str] = None, pipeline_id: Optional[str] = None) -> Optional[BIDSProcessResults]:
     """
