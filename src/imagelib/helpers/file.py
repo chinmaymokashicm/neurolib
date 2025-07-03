@@ -30,3 +30,25 @@ def copy_as_symlinks(src, dst):
         for dir in dirs:
             dst_dir = os.path.join(dest_root, dir)
             os.makedirs(dst_dir, exist_ok=True)
+
+def generate_tree(values: list[str], delimiter: str = '/') -> dict:
+    """
+    Generate a nested dictionary tree from a list of strings.
+    
+    Args:
+        values (list[str]): List of strings representing the paths.
+        delimiter (str): Delimiter used to split the strings into parts. Default is '/'.
+        
+    Returns:
+        dict: A nested dictionary representing the tree structure.
+    """
+    tree = {}
+    for value in values:
+        parts = value.split(delimiter)
+        current_level = tree
+        for part in parts:
+            if part not in current_level:
+                current_level[part] = {}
+            current_level = current_level[part]
+    return tree
+            
