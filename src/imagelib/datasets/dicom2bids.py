@@ -192,7 +192,7 @@ class DICOMToBIDSConvertor(BaseModel):
             self.bids_root.mkdir(parents=True, exist_ok=True)
         subprocess.run(["dcm2bids_scaffold", "-o", str(self.bids_root)], check=False)
         
-    def prepare_migrations(self, symlink: bool = True, sample: bool = True, convert_to_nifti: bool = False) -> DataMigrations:
+    def prepare_migrations(self, symlink: bool = True, sample: bool = True, convert_to_nifti: bool = False, skip_missing: bool = True) -> DataMigrations:
         """
         Prepare the migrations for the DICOM dataset.
         """
@@ -214,6 +214,9 @@ class DICOMToBIDSConvertor(BaseModel):
                     # Convert DICOM to NIFTI
                     for scan in session_info.scans:
                         dicom_dir: PosixPath = self.dicom_root / session_info.dicom_subdir / scan.series_name
+                        if not dicom_dir.exists() and skip_missing:
+                            print(f"Skipping {dicom_dir} as it does not exist")
+                            continue
                         filename: str = f"{scan.series_name}"
                         comment: str = f"Sourced from {dicom_dir}"
                         cmd: list[str] = ["dcm2niix", "-z", "y", "-o", str(session_dir), "-f", filename, "-ba", "y", "-c", comment, str(dicom_dir)]
