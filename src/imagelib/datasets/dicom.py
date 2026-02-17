@@ -1,322 +1,346 @@
 """
-Load DICOM data and create mappings on participant level.
+Subject -1:N-> Session -1:N-> Series -1:N-> Scan
 """
-from ..helpers.data import flatten_no_compound_key
+import re
+from typing import Optional, Self, Any
+from pathlib import Path
+from datetime import date
 
-from pathlib import Path, PosixPath
-from typing import Optional, Iterable, Iterator
-from collections.abc import MutableMapping
-
-from pydantic import BaseModel, field_validator
-import pydicom as dicom
-from rich.progress import track
+from pydantic import BaseModel, Field
 import pandas as pd
+from rich.progress import track
+import pydicom as dicom
 
-class Scan(BaseModel):
-    """
-    Information about a scan.
-    """
-    series_description: str
-    scan_type: Optional[str] = None
-    scan_date: Optional[str] = None
-    series_name: Optional[str] = None
-    series_description: Optional[str] = None
-    series_number: Optional[str] = None
-    acquisition_time: Optional[str] = None
-    scan_subdir: str
-    
-    @field_validator("series_number", mode="before")
-    def convert_series_number(cls, value):
-        if value is not None:
-            return str(value)
-        return value
+DICOM_TAGS: list[str] = [
+    "StudyDate",
+    "AcquisitionTime",
+    "SeriesDescription",
+    "SeriesNumber",
+    "ProtocolName",
+    "Manufacturer",
+    "ManufacturerModelName",
+    "MagneticFieldStrength",
+    "RepetitionTime",
+    "EchoTime",
+    "SliceThickness",
+    "PixelSpacing",
+    "ContrastBolusAgent",
+    "FlipAngle",
+    "Rows",
+    "Columns",
+    "NumberOfFrames",
+    "ImagePositionPatient",
+    "ImageOrientationPatient",
+    "TemporalPositionIdentifier",
+    "NumberOfTemporalPositions",
+    "PatientPosition",
+    "PatientSex",
+    "PatientAge",
+    "PatientSize",
+    "PatientWeight",
+    "BodyPartExamined",
+    "ScanningSequence",
+]
 
-class Session(BaseModel):
-    """
-    Session information for a participant.
-    """
-    session_id: str
-    bids_session_id: Optional[str] = None
-    dicom_subdir: str
-    scans: list[Scan]
-    
-    @field_validator("bids_session_id", mode="before")
-    def convert_bids_session_id(cls, value):
-        if isinstance(value, int):
-            return f"{value:02d}"
-        return value
-
-class Participant(BaseModel):
-    """
-    Information about a participant, including their original subject ID and sessions.
-    """
+class MRNCrosswalkEntry(BaseModel):
     subject_id: str
-    participant_id: str
-    sessions: list[Session]
+    mrn: str
+    study_date: Optional[date] = None
     
-    @field_validator("participant_id", mode="before")
-    def convert_participant_id(cls, value):
-        if isinstance(value, int):
-            return f"{value:04d}"
-        return value
-    
-    def __str__(self):
-        """
-        Print the participant mappings in a human-readable format.
-        """
-        output: str = f"Participant {self.participant_id} ({self.subject_id})\n"
-        for sessions in self.sessions:
-            output += f"  {sessions.session_id}\n"
-            for scan_info in sessions.scans:
-                output += f"    {scan_info.series_description}\n"
-        return output
-    
-class Participants(BaseModel):
-    participants: list[Participant]
-    
-    def __str__(self):
-        """
-        Print the participant mappings in a human-readable format.
-        """
-        output: str = ""
-        for participant in self.participants:
-            output += str(participant)
-        return output
-    
-    def __iter__(self) -> Iterator[Participant]:
-        """
-        Allow iteration over participants.
-        """
-        return iter(self.participants)
+class MRNCrosswalk(BaseModel):
+    entries: list[MRNCrosswalkEntry] = Field(default_factory=list)
     
     @classmethod
-    def from_table(cls, df: pd.DataFrame) -> "Participants":
-        """
-        Create a Participants object from a list of dictionaries.
-        """
-        # Convert all columns to strings
-        df = df.astype(str)
-        participant_ids: list[str] = df["participant_id"].unique().tolist()
-        participants_dict: list[Participant] = []
-        for participant_id in participant_ids:
-            subject_id: str = df[df["participant_id"] == participant_id]["subject_id"].iloc[0]
-            participant_dict: dict = {"participant_id": int(participant_id), "subject_id": subject_id, "sessions": []}
-            bids_session_ids: list[str] = df[df["participant_id"] == participant_id]["bids_session_id"].unique().tolist()
-            for bids_session_id in bids_session_ids:
-                session_id, dicom_subdir, bids_session_id = df[(df["participant_id"] == participant_id) & (df["bids_session_id"] == bids_session_id)][["session_id", "dicom_subdir", "bids_session_id"]].iloc[0]
-                series_descriptions: list[str] = df[(df["participant_id"] == participant_id) & (df["bids_session_id"] == bids_session_id)]["series_description"].unique().tolist()
-                session_dict: dict = {"session_id": session_id, "dicom_subdir": dicom_subdir, "bids_session_id": bids_session_id, "scans": []}
-                for series_description in series_descriptions:
-                    scan_type, scan_date, series_number, acquisition_time, scan_subdir, series_name = df[(df["participant_id"] == participant_id) & (df["bids_session_id"] == bids_session_id) & (df["series_description"] == series_description)][["scan_type", "scan_date", "series_number", "acquisition_time", "scan_subdir", "series_name"]].iloc[0]
-                    scan_dict: dict = {"series_description": series_description, "scan_type": scan_type, "scan_date": scan_date, "series_number": series_number, "acquisition_time": acquisition_time, "scan_subdir": scan_subdir, "series_name": series_name}
-                    session_dict["scans"].append(Scan(**scan_dict))
-                participant_dict["sessions"].append(Session(**session_dict))
-            participants_dict.append(Participant(**participant_dict))
-            
-        participants: Participants = cls(participants=participants_dict)
-        return participants
+    def from_csv(cls, csv_path: Path | str, subject_colname: str = 'Subject', mrn_colname: str = 'PatientID', study_date_colname: Optional[str] = 'StudyDate') -> Self:
+        df_crosswalk: pd.DataFrame = pd.read_csv(csv_path, dtype=str)
+        df_mapping: pd.DataFrame = df_crosswalk[[subject_colname, mrn_colname, study_date_colname]].dropna()
+        df_mapping[study_date_colname] = pd.to_datetime(
+            df_mapping[study_date_colname],
+            format='%Y%m%d',
+            errors='coerce'
+        ).dt.date
+        if study_date_colname is not None:
+            df_mapping = df_mapping.dropna(subset=[study_date_colname])
+        entries = [
+            MRNCrosswalkEntry(
+                subject_id=row[subject_colname],
+                mrn=row[mrn_colname],
+                study_date=row[study_date_colname] if study_date_colname is not None else None)
+            for _, row in df_mapping.iterrows()
+        ]
+        return cls(entries=entries)
     
-    def filter(self, participant_ids: Optional[list[str]] = None, bids_session_ids: Optional[list[str]] = None) -> "Participants":
-        """
-        Filter participants based on participant IDs and BIDS session IDs.
-        """
-        if not participant_ids and not bids_session_ids:
-            return self
-        filtered_participants: list[Participant] = []
-        for participant in self.participants:
-            if not participant.participant_id in participant_ids:
-                continue
-            filtered_sessions: list[Session] = participant.sessions
-            if bids_session_ids:
-                filtered_sessions: list[Session] = [session for session in participant.sessions if session.bids_session_id in bids_session_ids]
-            filtered_participants.append(Participant(subject_id=participant.subject_id, participant_id=participant.participant_id, sessions=filtered_sessions))
-        return Participants(participants=filtered_participants)
-        
-    
-    def to_table(self, skip_columns: Optional[Iterable[str]] = None, to_df: bool = False) -> list[dict] | pd.DataFrame:
-        """
-        Convert participant mappings to a list of flattened dictionaries.
-        """
-        rows: list[dict] = []
-        for participant in self.participants:
-            for session in participant.sessions:
-                for scan in session.scans:
-                    row: dict = {
-                        "subject_id": participant.subject_id,
-                        "participant_id": participant.participant_id,
-                        "session_id": session.session_id,
-                        "bids_session_id": session.bids_session_id,
-                        "dicom_subdir": session.dicom_subdir,
-                        "series_name": scan.series_name,
-                        "series_description": scan.series_description,
-                        "scan_type": scan.scan_type,
-                        "scan_date": scan.scan_date,
-                        "series_number": scan.series_number,
-                        "acquisition_time": scan.acquisition_time,
-                        "scan_subdir": scan.scan_subdir
-                    }
-                    if skip_columns:
-                        row = {k: v for k, v in row.items() if k not in skip_columns}
-                    rows.append(row)
-                    
-        if to_df:
-            return pd.DataFrame(rows)
-        return rows
-
-# ============================DICOM Loaders============================
-
-def determine_scan_info(scan_dir: PosixPath) -> Optional[Scan]:
-    if not scan_dir.is_dir():
-        raise ValueError(f"{scan_dir} is not a directory")
-    dicom_file: PosixPath = next(scan_dir.glob("*.dcm"), None)
-    if not dicom_file:
-        print(f"No DICOM files found in {scan_dir}")
+    def get_mrn(self, subject_id: str) -> Optional[str]:
+        for entry in self.entries:
+            if entry.subject_id == subject_id:
+                return entry.mrn
         return None
     
-    scan_date = dicom.dcmread(dicom_file).StudyDate
-    if not scan_date:
-        scan_date = dicom.dcmread(dicom_file).AcquisitionDate
-    if not scan_date:
-        print(f"No date found for {dicom_file}")
-    series_description: str = dicom.dcmread(dicom_file).SeriesDescription
-    series_number = dicom.dcmread(dicom_file).SeriesNumber
-    acquisition_time = dicom.dcmread(dicom_file).AcquisitionTime.split(".")[0]
+    def get_study_date(self, subject_id: str) -> Optional[date]:
+        for entry in self.entries:
+            if entry.subject_id == subject_id:
+                return entry.study_date
+        return None
 
-    # Determine scan type based on SeriesDescription, MRAcquisitionType, and DiffusionBValue
-    if any(keyword in series_description.lower() for keyword in ["t1", "mprage", "t2", "flair"]):
-        scan_type = "anat"
-    elif any(keyword in series_description.lower() for keyword in ["dwi", "dti"]) or "DiffusionBValue" in dicom.dcmread(dicom_file):
-        scan_type = "dwi"
-    elif any(keyword in series_description.lower() for keyword in ["bold", "task", "rest"]):
-        scan_type = "func"
-    else:
-        scan_type = "unexpected"
+class ScanField(BaseModel):
+    variable_name: str
+    dicom_tag: str
+    description: Optional[str] = None
+    value: Optional[Any] = None
 
-    return Scan(
-        series_description=series_description,
-        scan_type=scan_type,
-        scan_date=scan_date,
-        series_name=scan_dir.name,
-        series_number=series_number,
-        acquisition_time=acquisition_time,
-        scan_subdir=str(scan_dir)
-        )
+class Scan(BaseModel):
+    name: str
+    scan_fields: list[ScanField] = Field(default_factory=list)
+    
+    @classmethod
+    def from_dicom_file(cls, dicom_path: Path | str, name: Optional[str] = None) -> Self:
+        dicom_path = Path(dicom_path)
+        dicom_data = dicom.dcmread(dicom_path)
+        scan_fields = [ScanField(variable_name=tag, dicom_tag=tag, value=getattr(dicom_data, tag, None)) for tag in DICOM_TAGS]
+        return cls(name=name if name is not None else dicom_path.stem, scan_fields=scan_fields)
+    
+class Series(BaseModel):
+    name: str
+    scans: list[Scan] = Field(default_factory=list)
+    series_description: Optional[str] = None
+    series_date: Optional[date] = None
+    
+class Session(BaseModel):
+    name: str
+    series: list[Series] = Field(default_factory=list)
+    study_date: Optional[date] = None
+    
+class Subject(BaseModel):
+    mrn: Optional[str] = None
+    name: str
+    sessions: list[Session] = Field(default_factory=list)
+    
+class Subjects(BaseModel):
+    subjects: list[Subject] = Field(default_factory=list)
+    
+    def __getitem__(self, subject_name: str) -> Optional[Subject]:
+        for subject in self.subjects:
+            if subject.name == subject_name:
+                return subject
+        return None
+    
+    def __str__(self) -> str:
+        output = []
+        for subject in self.subjects:
+            output.append(f"Subject: {subject.name} (MRN: {subject.mrn})")
+            for session in subject.sessions:
+                output.append(f"  Session: {session.name} (Date: {session.study_date})")
+                for series in session.series:
+                    output.append(f"    Series: {series.name} (Description: {series.series_description})")
+                    for scan in series.scans:
+                        output.append(f"      Scan: {scan.name}")
+        return "\n".join(output)
+    
+    @classmethod
+    def from_flat_sessions_dicom_dir(
+        cls,
+        dicom_root: Path | str,
+        series_subdir_pattern: Path | str = "",
+        dicom_subdir_pattern: Path | str = "",
+        mrn_crosswalk_path: Optional[Path | str] = None,
+        filter_by_mrn: bool = True,
+        sample: Optional[int] = None,
+        load_dicom_fields: bool = False
+    ) -> Self:
+        """
+        Assumes a directory structure of:
+        Session ID/
+            Series ID/
+                DICOM files...
+        where Session ID is unique across all subjects.
+        The pattern arguments append to the end of the respective subdirectory names, and can be used to filter for specific sessions/series/dicoms.
         
-    
-
-def load_dicom_structured_sessions(dicom_root: PosixPath, sample: Optional[int] = None) -> Participants:
-    """
-    DICOM Loader if the DICOM dataset has the following features-
-    1. The directory structure is organized by session ID and scans.
-    2. Scan subdirectories contain DICOM files.
-    
-    Example tree-
-    <root>
-    ├── <session_id_1>
-    │   ├── <scan_1>
-    │   │   ├── <dicom_files>
-    """
-    participant_mappings: list[Participant] = []
-    
-    session_ids: list[str] = sorted([subdir.name for subdir in dicom_root.iterdir() if subdir.is_dir()])
-    subject_ids: list[str] = sorted(set(["-".join(session_id.split("-")[:2]) for session_id in session_ids]))    
-    
-    end: int = sample if sample else len(subject_ids)
-    for participant_id, subject_id in enumerate(subject_ids[:end], start=1):
-        print(f"Loading participant {participant_id} ({subject_id})")
-        session_subdirs: list[PosixPath] = sorted([subdir for subdir in dicom_root.iterdir() if subdir.is_dir() and subdir.name.startswith(subject_id)])
-        session_info: list[Session] = []
-        for bids_session_id, session_dir in enumerate(session_subdirs, start=1):
-            if not session_dir.is_dir():
+        Args:
+            dicom_root: Root directory containing session subdirectories.
+            series_subdir_pattern: Optional pattern to append to the end of series subdirectory names for filtering (e.g. "SCANS/").
+            dicom_subdir_pattern: Optional pattern to append to the end of dicom subdirectory names for filtering (e.g. "DICOM/").
+            mrn_crosswalk_path: Optional path to CSV file containing MRN crosswalk information.
+            filter_by_mrn: Whether to filter subjects by MRN using the crosswalk. If True, only subjects with MRN information in the crosswalk will be included.
+            sample: Optional integer to limit the number of sessions processed (for testing purposes).
+            load_dicom_fields: Whether to load DICOM fields for each scan. If False, only the scan name will be loaded without the additional DICOM metadata.
+        """
+        dicom_root = Path(dicom_root)
+        
+        subjects: Self = cls()
+        
+        # Use the crosswalk to map subject ID with MRN and keep only those subjects going forward if filter_by_mrn is True
+        mrn_crosswalk = None
+        if mrn_crosswalk_path is not None:
+            mrn_crosswalk = MRNCrosswalk.from_csv(mrn_crosswalk_path)
+        if filter_by_mrn and mrn_crosswalk is None:
+            raise ValueError("MRN crosswalk is required for filtering by MRN, but no mapping was found.")
+        
+        # Identify each subdirectory in the root as a session if it is in the pattern of XXXX-XXXX-XXXX-XXXX
+        subjects_list: list[Subject] = []
+        sessions_list: list[Session] = []
+        sessions: list[tuple[str, Path]] = [(subdir.name, subdir) for subdir in dicom_root.iterdir() if subdir.is_dir() and re.match(r'^\d{4}-\d{4}-\d{4}-\d{4}$', subdir.name)]
+        if sample is not None:
+            sessions = sessions[:sample]
+        for session_id, session_path in track(sessions, description="Processing sessions..."):
+            # Extract subject ID from session ID (XXXX-XXXX is the subject ID)
+            subject_id = '-'.join(session_id.split('-')[:2])
+            if filter_by_mrn:
+                mrn = mrn_crosswalk.get_mrn(subject_id) if mrn_crosswalk is not None else None
+                if mrn is None:
+                    continue
+            else:
+                mrn = None
+            series_list: list[Series] = []
+            series: list[tuple[str, Path]] = [(subdir.name, subdir) for subdir in (session_path / series_subdir_pattern).iterdir() if subdir.is_dir()]
+            for series_id, series_path in series:
+                dicoms: list[Path] = [dicom for dicom in (series_path / dicom_subdir_pattern).iterdir() if dicom.is_file()]
+                if len(dicoms) == 0:
+                    continue
+                series_list.append(Series(name=series_id, scans=[Scan.from_dicom_file(dicom_path=dicom) for dicom in dicoms] if load_dicom_fields else [Scan(name=dicom.name) for dicom in dicoms]))
+            if len(series_list) == 0:
                 continue
-            session_id: str = session_dir.name
-            # dicom_subdir: str = session.name
-            scans: list[Scan] = []
-            for scan_dir in session_dir.iterdir():
-                if not scan_dir.is_dir():
-                    continue
-                try:
-                    scan: Optional[Scan] = determine_scan_info(scan_dir)
-                except AttributeError as e:
-                    print(e)
-                    continue
-                if scan:
-                    scans.append(scan)
-                
-            session_info.append(Session(
-                session_id=session_id,
-                bids_session_id=bids_session_id,
-                dicom_subdir=str(session_dir),
-                scans=scans
-                ))
-            
-        participant_mappings.append(
-            Participant(
-                subject_id=subject_id,
-                participant_id=participant_id,
-                sessions=session_info,
-            )
-        )
+            session = Session(name=session_id, series=series_list, study_date=mrn_crosswalk.get_study_date(subject_id) if mrn_crosswalk is not None else None)
+            sessions_list.append(session)
+            # Check if subject already exists in subjects_list
+            subject = next((s for s in subjects_list if s.name == subject_id), None)
+            if subject is None:
+                subject = Subject(name=subject_id, mrn=mrn, sessions=[session])
+                subjects_list.append(subject)
+            else:
+                subject.sessions.append(session)
+        subjects.subjects = subjects_list
+        return subjects
+    
+    @classmethod
+    def from_nested_dicom_dir(
+        cls,
+        dicom_root: Path | str,
+        session_subdir_pattern: Path | str = "",
+        series_subdir_pattern: Path | str = "",
+        dicom_subdir_pattern: Path | str = "",
+        mrn_crosswalk_path: Optional[Path | str] = None,
+        filter_by_mrn: bool = True,
+        sample: Optional[int] = None,
+        load_dicom_fields: bool = False
+    ) -> Self:
+        """
+        Assumes a directory structure of:
+        Subject ID/
+            Session ID/
+                Series ID/
+                    DICOM files...
+        where Session ID is unique within each subject, and Subject ID is unique across all subjects.
+        The pattern arguments append to the end of the respective subdirectory names, and can be used to filter for specific sessions/series/dicoms.
         
-    return Participants(participants=participant_mappings)
-
-def load_dicom_structured_subjects(dicom_root: PosixPath, sample: Optional[int] = None) -> Participants:
-    """
-    DICOM Loader if the DICOM dataset has the following features-
-    1. The directory structure is organized by subject ID, session ID, and scans.
-    2. Scan subdirectories contain DICOM files.
-    3. Subdirectory names are used as subject IDs and session IDs.
-    
-    Example tree-
-    <root>
-    ├── <subject_id_1>
-    │   ├── <session_id_1>
-    │   │   ├── <scan_1>
-    │   │   │   ├── <dicom_files>
-    """
-    participant_mappings: list[Participant] = []
-    subject_ids: list[str] = sorted([subdir.name for subdir in dicom_root.iterdir() if subdir.is_dir()])
-    
-    end: int = sample if sample else len(subject_ids)
-    
-    for participant_id, subject_id in enumerate(subject_ids[:end], start=1):
-        print(f"Loading participant {participant_id} ({subject_id})")
-        session_subdirs: list[PosixPath] = sorted([subdir for subdir in (dicom_root / subject_id).iterdir() if subdir.is_dir()])
-        session_info: list[Session] = []
-        for bids_session_id, session in enumerate(session_subdirs, start=1):
-            if not session.is_dir():
+        Args:
+            dicom_root: Root directory containing subject subdirectories.
+            session_subdir_pattern: Optional pattern to append to the end of session subdirectory names for filtering (e.g. "SESSIONS/").
+            series_subdir_pattern: Optional pattern to append to the end of series subdirectory names for filtering (e.g. "SCANS/").
+            dicom_subdir_pattern: Optional pattern to append to the end of dicom subdirectory names for filtering (e.g. "DICOM/").
+            mrn_crosswalk_path: Optional path to CSV file containing MRN crosswalk information.
+            filter_by_mrn: Whether to filter subjects by MRN using the crosswalk. If True, only subjects with MRN information in the crosswalk will be included.
+            sample: Optional integer to limit the number of subjects processed (for testing purposes).
+            load_dicom_fields: Whether to load DICOM fields for each scan. If False, only the scan name will be loaded without the additional DICOM metadata.
+        """
+        dicom_root = Path(dicom_root)
+        
+        subjects: Self = cls()
+        
+        # Use the crosswalk to map subject ID with MRN and keep only those subjects going forward if filter_by_mrn is True
+        mrn_crosswalk = None
+        if mrn_crosswalk_path is not None:
+            mrn_crosswalk = MRNCrosswalk.from_csv(mrn_crosswalk_path)
+        if filter_by_mrn and mrn_crosswalk is None:
+            raise ValueError("MRN crosswalk is required for filtering by MRN, but no mapping was found.")
+        
+        subjects_list: list[Subject] = []
+        subject_dirs: list[tuple[str, Path]] = [(subdir.name, subdir) for subdir in dicom_root.iterdir() if subdir.is_dir()]
+        if sample is not None:
+            subject_dirs = subject_dirs[:sample]
+        for subject_id, subject_path in track(subject_dirs, description="Processing subjects..."):
+            if filter_by_mrn:
+                mrn = mrn_crosswalk.get_mrn(subject_id) if mrn_crosswalk is not None else None
+                if mrn is None:
+                    continue
+            else:
+                mrn = None
+            sessions_list: list[Session] = []
+            session_dirs: list[tuple[str, Path]] = [(subdir.name, subdir) for subdir in (subject_path / session_subdir_pattern).iterdir() if subdir.is_dir()]
+            for session_id, session_path in session_dirs:
+                series_list: list[Series] = []
+                series_dirs: list[tuple[str, Path]] = [(subdir.name, subdir) for subdir in (session_path / series_subdir_pattern).iterdir() if subdir.is_dir()]
+                for series_id, series_path in series_dirs:
+                    dicoms: list[Path] = [dicom for dicom in (series_path / dicom_subdir_pattern).iterdir() if dicom.is_file()]
+                    if len(dicoms) == 0:
+                        continue
+                    series_list.append(Series(name=series_id, scans=[Scan.from_dicom_file(dicom_path=dicom) for dicom in dicoms] if load_dicom_fields else [Scan(name=dicom.name) for dicom in dicoms]))
+                if len(series_list) == 0:
+                    continue
+                session = Session(name=session_id, series=series_list, study_date=mrn_crosswalk.get_study_date(subject_id) if mrn_crosswalk is not None else None)
+                sessions_list.append(session)
+            if len(sessions_list) == 0:
                 continue
-            session_id: str = session.name
-            # dicom_subdir: str = session.name
-            scans: list[Scan] = []
-            for scan_dir in session.iterdir():
-                if not scan_dir.is_dir():
-                    continue
-                
-                # Load scan date from first DICOM file within the scan directory, skip if directory is empty
-                try:
-                    scan: Optional[Scan] = determine_scan_info(scan_dir)
-                except AttributeError as e:
-                    print(f"Error loading {scan_dir}: {e}")
-                    continue
-                if scan:
-                    scans.append(scan)
-                else:
-                    print(f"No DICOM files found in {scan_dir}")
-                
-            session_info.append(Session(
-                session_id=session_id,
-                bids_session_id=bids_session_id,
-                dicom_subdir=str(session),
-                scans=scans
-                ))
-            
-        participant_mappings.append(
-            Participant(
-                subject_id=subject_id,
-                participant_id=participant_id,
-                sessions=session_info,
-            )
-        )
+            subject = Subject(name=subject_id, mrn=mrn, sessions=sessions_list)
+            subjects_list.append(subject)
+        subjects.subjects = subjects_list
+        return subjects
         
-    return Participants(participants=participant_mappings)
+    @classmethod
+    def from_csv(cls, csv_path: Path | str) -> Self:
+        df = pd.read_csv(csv_path, dtype=str)
+        subjects_dict: dict[str, Subject] = {}
+        for _, row in df.iterrows():
+            subject_name = row['subject_name']
+            mrn = row['mrn']
+            session_name = row['session_name']
+            study_date = row['study_date']
+            series_name = row['series_name']
+            series_description = row['series_description']
+            scan_name = row['scan_name']
+            scan_fields = [ScanField(variable_name=col, dicom_tag=col, value=row[col]) for col in df.columns if col not in ['subject_name', 'mrn', 'session_name', 'study_date', 'series_name', 'series_description', 'scan_name']]
+            
+            if subject_name not in subjects_dict:
+                subjects_dict[subject_name] = Subject(name=subject_name, mrn=mrn, sessions=[])
+            subject = subjects_dict[subject_name]
+            
+            session = next((s for s in subject.sessions if s.name == session_name), None)
+            if session is None:
+                session = Session(name=session_name, series=[], study_date=study_date)
+                subject.sessions.append(session)
+            
+            series = next((s for s in session.series if s.name == series_name), None)
+            if series is None:
+                series = Series(name=series_name, scans=[], series_description=series_description)
+                session.series.append(series)
+            
+            scan = Scan(name=scan_name, scan_fields=scan_fields)
+            series.scans.append(scan)
+        
+        return cls(subjects=list(subjects_dict.values()))
+    
+    def to_csv(self, output_path: Path | str) -> None:
+        rows = []
+        for subject in self.subjects:
+            for session in subject.sessions:
+                for series in session.series:
+                    for scan in series.scans:
+                        row = {
+                            "subject_name": subject.name,
+                            "mrn": subject.mrn,
+                            "session_name": session.name,
+                            "study_date": session.study_date,
+                            "series_name": series.name,
+                            "series_description": series.series_description,
+                            "scan_name": scan.name
+                        }
+                        for field in scan.scan_fields:
+                            row[field.variable_name] = field.value
+                        rows.append(row)
+        df = pd.DataFrame(rows)
+        df.to_csv(output_path, index=False)
+
+    def add_subject(self, subject: Subject) -> None:
+        self.subjects.append(subject)
+    
+    def remove_subject(self, subject_name: str) -> None:
+        self.subjects = [subject for subject in self.subjects if subject.name != subject_name]

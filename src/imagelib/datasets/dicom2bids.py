@@ -12,30 +12,28 @@ Steps of conversion-
 4. Run dcm2bids with each session of the DICOM dataset having a unique participant ID and session ID
 """
 
-from ..helpers.file import copy_as_symlinks
+from ..helpers.file import copy_as_symlinks, human_readable_size
 from .dicom import Participant, Participants
 
 import shutil, subprocess, json
 from pathlib import Path, PosixPath
 import multiprocessing, ast
-from typing import Optional
+from typing import Literal, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from pydantic import BaseModel, FilePath, DirectoryPath, field_validator, Field
 import pandas as pd
 from rich.progress import track
     
-class DataMigration(BaseModel):
+class DICOMMigration(BaseModel):
     source_dir: DirectoryPath
     target_dir: DirectoryPath
-    subject_id: Optional[str] = None
-    session_id: Optional[str] = None
-    participant_id: Optional[str] = None
-    bids_session_id: Optional[str] = None
-
-class DICOMMigration(DataMigration):
+    subject_id: str
+    session_id: str
+    participant_id: str
+    bids_session_id: str
     symlink: bool = True
-    
+
     @field_validator("subject_id", "participant_id", "session_id", "bids_session_id", mode="before")
     def coerce_ids(cls, values):
         values["subject_id"] = str(values["subject_id"])
@@ -44,16 +42,15 @@ class DICOMMigration(DataMigration):
         values["bids_session_id"] = str(values["bids_session_id"])
         return values
     
-    @field_validator("symlink", mode="before")
-    def coerce_symlink(cls, value: str):
-        return bool(value)
+    @property
+    def command(self) -> str:
+        return f"cp -r {self.source_dir} {self.target_dir}" if not self.symlink else f"ln -s {self.source_dir} {self.target_dir}"
 
-class NiftiMigration(DataMigration):
+class NiftiMigration(DICOMMigration):
     filename: str
-    comment: Optional[str] = None
+    comment: str
     bids_anon: bool = True
     gz_compress: bool = True
-    cmd: list[str] = Field(default_factory=list)
     
     @field_validator("subject_id", "participant_id", "session_id", "bids_session_id", mode="before")
     def coerce_ids(cls, value: str):
@@ -63,69 +60,95 @@ class NiftiMigration(DataMigration):
     def coerce_bools(cls, value: str):
         return bool(value)
     
-    @field_validator("cmd", mode="before")
-    def coerce_cmd(cls, value: list[str] | str):
-        return ast.literal_eval(value) if isinstance(value, str) else value
+    @property
+    def command(self) -> str:
+        cmd: str = f"dcm2niix -z {'y' if self.gz_compress else 'n'} -f {self.filename} -o {self.target_dir} -w 0 -c '{self.comment}' "
+        if self.bids_anon:
+            cmd += "-ba y "
+        else:
+            cmd += "-ba n "
+        cmd += str(self.source_dir)
+        return "mkdir -p " + str(self.target_dir) + " && " + cmd
 
 class DataMigrations(BaseModel):
-    data_migrations: list[DataMigration]
+    data_migrations: list[DICOMMigration]
     
-    def __getitem__(self, index: int) -> DataMigration:
+    def __getitem__(self, index: int) -> DICOMMigration:
         return self.data_migrations[index]
     
     def filter(self, **kv_pairs) -> "DataMigrations":
         """
         Filter the data migrations.
         """
-        data_migrations: list[DataMigration] = [migration for migration in self.data_migrations if all(getattr(migration, key) == value for key, value in kv_pairs.items())]
+        data_migrations: list[DICOMMigration] = [migration for migration in self.data_migrations if all(getattr(migration, key) == value for key, value in kv_pairs.items())]
         return DataMigrations(data_migrations=data_migrations)
     
     def to_table(self, to_df: bool = False) -> list[dict] | pd.DataFrame:
         """
         Convert the data migrations to a table.
         """
-        columns: list[str] = list(set(DataMigration.model_fields.keys()) | set(DICOMMigration.model_fields.keys()) | set(NiftiMigration.model_fields.keys()))
+        columns: list[str] = list(set(DICOMMigration.model_fields.keys()) | set(DICOMMigration.model_fields.keys()) | set(NiftiMigration.model_fields.keys()))
         table: list[dict] = []
         for migration in track(self.data_migrations, description="Converting data migrations to table"):
             row: dict = {column: None for column in columns}
             row.update(migration.model_dump())
+            # Include command as a column
+            row["command"] = migration.command
             table.append(row)
             
         return pd.DataFrame(table) if to_df else table
     
     @classmethod
-    def from_table(cls, table: list[dict] | pd.DataFrame) -> "DataMigrations":
+    def from_table(cls, table: list[dict] | pd.DataFrame, sample: Optional[int] = None) -> "DataMigrations":
         """
         Create DataMigrations object from a table.
+        
+        Args:
+            table: List of dictionaries or pandas DataFrame representing the data migrations.
+            sample: If provided, only use the first 'sample' rows from the table.
+            
+        Returns:
+            DataMigrations object.
         """
         if isinstance(table, pd.DataFrame):
             table = table.to_dict(orient="records")
-        data_migrations: list[DataMigration] = []
+        data_migrations: list[DICOMMigration] = []
+        if sample is not None:
+            table = table[:sample]
+            print(f"Sampling first {sample} rows from the table to create DataMigrations object")
         for row in track(table, description="Creating DataMigrations object from table"):
             bids_anon: Optional[bool] = row.get("bids_anon", None)
+            # Remove command from row if exists
+            if "command" in row:
+                row.pop("command")
             if bids_anon is None:
-                migration: DataMigration = DICOMMigration(**row)
+                migration: DICOMMigration = DICOMMigration(**row)
             else:
-                migration: DataMigration = NiftiMigration(**row)
+                migration: DICOMMigration = NiftiMigration(**row)
             data_migrations.append(migration)
         return DataMigrations(data_migrations=data_migrations)
     
-    def execute(self) -> None:
+    def execute_parallel(self) -> None:
         """
         Execute the data migrations.
         """
         def run_migration_cmd(cmd):
             try:
-                subprocess.run(cmd, check=True)
-                return f"Command {cmd} completed successfully."
+                subprocess.run(cmd, shell=True, check=True)
+                return f"Command '{cmd}' completed successfully."
             except subprocess.CalledProcessError as e:
-                return f"Command {cmd} failed with error: {e}"
+                return f"Command '{cmd}' failed with error: {e}"
+            except Exception as e:
+                return f"Command '{cmd}' failed with unexpected error: {e}"
             
-        nifti_migration_cmds: list[list[str]] = [migration.cmd for migration in self.data_migrations if isinstance(migration, NiftiMigration) and not (migration.target_dir / f"{migration.filename}.nii.gz").exists()]
-        dicom_migration_cmds: list[DataMigration] = [migration for migration in self.data_migrations if isinstance(migration, DICOMMigration)]
+        nifti_migration_cmds: list[str] = [migration.command for migration in self.data_migrations if isinstance(migration, NiftiMigration) and not (migration.target_dir / f"{migration.filename}.nii.gz").exists()]
+        dicom_migration_cmds: list[DICOMMigration] = [migration for migration in self.data_migrations if isinstance(migration, DICOMMigration)]
             
         # Run the nifti conversions/migrations in parallel
         with ThreadPoolExecutor() as executor:
+            # Get commands for Nifti migrations that are not yet completed
+            
+            
             futures = [executor.submit(run_migration_cmd, cmd) for cmd in track(nifti_migration_cmds, description="Executing Nifti migrations")]
             for future in as_completed(futures):
                 print(future.result())
@@ -139,36 +162,89 @@ class DataMigrations(BaseModel):
                     shutil.copytree(migration.source_dir, migration.target_dir, dirs_exist_ok=True)
             else:
                 raise ValueError(f"Unsupported migration type: {type(migration)}")
+            
+    def execute_sequential(self) -> None:
+        """
+        Execute the data migrations sequentially.
+        """
+        for migration in track(self.data_migrations, description="Executing data migrations"):
+            cmd: str = migration.command
+            subprocess.run(cmd, shell=True, check=False)
 
-class NiftiData(BaseModel):
-    data_migrations: DataMigrations
+    def get_completion_status(self, sample: Optional[int] = None) -> pd.DataFrame:
+        """
+        Get the completion status of the data migrations.
+        
+        Args:
+            sample: If provided, only check the first 'sample' migrations.
+            
+        Returns:
+            pandas DataFrame with completion status.
+        """
+        if sample is not None:
+            migrations: list[DICOMMigration] = self.data_migrations[:sample]
+            print(f"Sampling first {len(migrations)} migrations for completion status")
+        else:
+            migrations: list[DICOMMigration] = self.data_migrations
+            print(f"Checking completion status for all {len(migrations)} migrations")
+        status_list: list[dict] = []
+        for migration in track(migrations, description="Getting completion status of data migrations"):
+            if isinstance(migration, NiftiMigration):
+                expected_file: Path = Path(migration.target_dir) / f"{migration.filename}.nii.gz"
+                completed: bool = expected_file.exists()
+                # Get size of the file in readable format if completed
+                file_size: int = expected_file.stat().st_size if completed else 0
+                # Convert size to human-readable format
+                file_size_hr = human_readable_size(file_size)
+            else:
+                expected_dir: Path = Path(migration.target_dir)
+                completed: bool = expected_dir.exists() and any(expected_dir.iterdir())
+                dir_size: int = sum(f.stat().st_size for f in expected_dir.rglob('*')) if completed else 0
+                dir_size_hr = human_readable_size(dir_size)
+            status_list.append({
+                "participant_id": migration.participant_id,
+                "subject_id": migration.subject_id,
+                "bids_session_id": migration.bids_session_id,
+                "session_id": migration.session_id,
+                "completed": completed,
+                "size": file_size_hr if isinstance(migration, NiftiMigration) else dir_size_hr
+            })
+        return pd.DataFrame(status_list)
     
-    def aggregate_field_values(self, fields: str | list[str], sample: Optional[int] = None, verbose: bool = True) -> dict:
+    def get_completion_stats(self, df_status: pd.DataFrame, by: Literal["subject", "session", "all"] = "subject") -> pd.DataFrame:
         """
-        Aggregate field values from the data migrations.
+        Get completion statistics of the data migrations.
+        
+        Args:
+            df_status: DataFrame with completion status.
+            by: Grouping level for statistics - "subject", "session", or "all".
+            
+        Returns:
+            pandas DataFrame with completion statistics.
         """
-        if not all(isinstance(migration, NiftiMigration) for migration in self.data_migrations.data_migrations):
-            raise ValueError("Data migrations contain non-Nifti migrations")
-        fields: list[str] = [fields] if isinstance(fields, str) else fields
-        aggregated_data: dict = {field: {} for field in fields}
-        data_migrations: list[NiftiMigration] = self.data_migrations.data_migrations[:sample] if sample else self.data_migrations.data_migrations
-        for data_migration in track(data_migrations, description=f"Aggregating field values for {', '.join(fields)} from {len(data_migrations)} data migrations"):
-            filepath: PosixPath = Path(data_migration.target_dir) / f"{data_migration.filename}.json"
-            if not filepath.exists():
-                if verbose:
-                    print(f"File {filepath} does not exist")
-                continue
-            with open(filepath, "r") as f:
-                sidecar_data: dict = json.load(f)
-            for field in fields:
-                value = sidecar_data.get(field, None)
-                if isinstance(value, list):
-                    raise ValueError(f"Field {field} is a list")
-                if value not in aggregated_data[field]:
-                    aggregated_data[field][value] = 0
-                aggregated_data[field][value] += 1
-                # print(f"Field {field}: {value}")
-        return {field: dict(sorted(values.items(), key=lambda item: item[1], reverse=True)) for field, values in aggregated_data.items()}
+        if by == "subject":
+            group_cols = ["participant_id"]
+        elif by == "session":
+            group_cols = ["participant_id", "bids_session_id"]
+        else:
+            group_cols = []
+        
+        if group_cols:
+            stats: pd.DataFrame = df_status.groupby(group_cols).agg(
+                total_migrations=pd.NamedAgg(column="completed", aggfunc="count"),
+                completed_migrations=pd.NamedAgg(column="completed", aggfunc="sum")
+            ).reset_index()
+        else:
+            total_migrations: int = len(df_status)
+            completed_migrations: int = df_status["completed"].sum()
+            stats: pd.DataFrame = pd.DataFrame([{
+                "total_migrations": total_migrations,
+                "completed_migrations": completed_migrations
+            }])
+        
+        stats["completion_rate"] = stats["completed_migrations"] / stats["total_migrations"] * 100.0
+        stats = stats.sort_values(by="completion_rate", ascending=False).reset_index(drop=True)
+        return stats
 
 class DICOMToBIDSConvertor(BaseModel):
     bids_root: DirectoryPath
@@ -178,9 +254,9 @@ class DICOMToBIDSConvertor(BaseModel):
     cmds: list[list[str]] = Field(default_factory=list)
     
     @field_validator("bids_root", mode="before")
-    def create_bids_root(cls, value):
-        if not value.exists():
-            value.mkdir(parents=True, exist_ok=True)
+    def create_bids_root(cls, value: str | Path):
+        if not Path(value).exists():
+            Path(value).mkdir(parents=True, exist_ok=True)
         return value
     
     def create_bids_scaffolding(self):
@@ -192,11 +268,11 @@ class DICOMToBIDSConvertor(BaseModel):
             self.bids_root.mkdir(parents=True, exist_ok=True)
         subprocess.run(["dcm2bids_scaffold", "-o", str(self.bids_root)], check=False)
         
-    def prepare_migrations(self, symlink: bool = True, sample: bool = True, convert_to_nifti: bool = False, skip_missing: bool = True) -> DataMigrations:
+    def prepare_migrations(self, symlink: bool = True, sample: bool = True, convert_to_nifti: bool = False, skip_missing: bool = True, save_to: Optional[Path] = None) -> DataMigrations:
         """
         Prepare the migrations for the DICOM dataset.
         """
-        migrations: list[DataMigration] = []
+        migrations: list[DICOMMigration] = []
         end: int = 2 if sample else len(self.participants.participants)
         
         for participant in self.participants.participants[:end]:
@@ -212,14 +288,11 @@ class DICOMToBIDSConvertor(BaseModel):
                 
                 if convert_to_nifti:
                     # Convert DICOM to NIFTI
-                    for scan in session_info.scans:
-                        dicom_dir: PosixPath = self.dicom_root / session_info.dicom_subdir / scan.series_name
+                    for study in session_info.studies:
+                        dicom_dir: Path = Path(study.study_subdir)
                         if not dicom_dir.exists() and skip_missing:
                             print(f"Skipping {dicom_dir} as it does not exist")
                             continue
-                        filename: str = f"{scan.series_name}"
-                        comment: str = f"Sourced from {dicom_dir}"
-                        cmd: list[str] = ["dcm2niix", "-z", "y", "-o", str(session_dir), "-f", filename, "-ba", "y", "-c", comment, str(dicom_dir)]
                         
                         migration: NiftiMigration = NiftiMigration(
                             source_dir=dicom_dir,
@@ -228,9 +301,10 @@ class DICOMToBIDSConvertor(BaseModel):
                             session_id=session_info.session_id,
                             participant_id=participant.participant_id,
                             bids_session_id=session_info.bids_session_id,
-                            filename=filename,
-                            comment=comment,
-                            cmd=cmd
+                            symlink=symlink,
+                            filename=study.study_name,
+                            comment=f"Converted from DICOM study {study.study_name}",
+                            bids_anon=True
                         )
                         
                         migrations.append(migration)
@@ -249,6 +323,12 @@ class DICOMToBIDSConvertor(BaseModel):
                 )
                 migrations.append(migration)
                 
+        if save_to:
+            data_migrations: DataMigrations = DataMigrations(data_migrations=migrations)
+            table: pd.DataFrame = data_migrations.to_table(to_df=True)
+            table.to_csv(save_to, index=False)
+            print(f"Saved data migrations to {save_to}")
+            
         return DataMigrations(data_migrations=migrations)
             
     def run_dcm2bids_helper(self, participant_id: str, bids_session_id: str, output_dir: PosixPath = Path("tmp/")) -> None:
@@ -260,31 +340,42 @@ class DICOMToBIDSConvertor(BaseModel):
         dicom_subdir_full_path: PosixPath = self.dicom_root / dicom_subdir
         subprocess.run(["dcm2bids_helper", "-d", str(dicom_subdir_full_path), "-o", str(output_dir)], check=True)
 
-    def generate_cmds(self, nifti2bids: bool = False, auto_extract_entities: bool = True) -> None:
+    def generate_cmds(self, data_migrations: str | Path | DataMigrations, skip_dcm2niix: bool = False, auto_extract_entities: bool = True) -> None:
         """
-        Generate dcm2bids commands for all participants. If nifti2bids is True, skip dcm2niix conversion.
+        Generate dcm2bids commands for all participants. If skip_dcm2niix is True, skip dcm2niix conversion.
         """
+        if isinstance(data_migrations, (str, Path)):
+            data_migrations: DataMigrations = DataMigrations.from_table(pd.read_csv(data_migrations))
+        
         if not self.config:
             raise ValueError("Configuration file not provided")
-        if nifti2bids:
-            # Skip dcm2niix conversion. 
-            # Instead of reading from the DICOM directory, read from the NIFTI directory (bids_root/sourcedata)
-            for participant in self.participants.participants:
-                for session_info in participant.sessions:
-                    nifti_dir: PosixPath = self.bids_root / "sourcedata" / participant.subject_id / session_info.session_id
-                    cmd: list[str] = ["dcm2bids", "-d", str(nifti_dir), "-p", participant.participant_id, "-s", session_info.bids_session_id, "-c", str(self.config), "-o", str(self.bids_root), "--skip_dcm2niix"]
-                    if auto_extract_entities:
-                        cmd.append("--auto_extract_entities")
-                    self.cmds.append(cmd)
-        else:
-            for participant in self.participants.participants:
-                for session_info in participant.sessions:
-                    dicom_subdir: str = session_info.dicom_subdir
-                    cmd: list[str] = ["dcm2bids", "-d", dicom_subdir, "-p", participant.participant_id, "-s", session_info.bids_session_id, "-c", str(self.config), "-o", str(self.bids_root)]
-                    if auto_extract_entities:
-                        cmd.append("--auto_extract_entities")
-                    self.cmds.append(cmd)
-                
+        
+        # Running dcm2bids on session-level data, but migrations data is at study-level
+        df_migrations: pd.DataFrame = data_migrations.to_table(to_df=True)
+        # Remove duplicate participant_id and bids_session_id combinations
+        df_sessions: pd.DataFrame = df_migrations[["participant_id", "bids_session_id", "target_dir"]].drop_duplicates()
+        for _, row in df_sessions.iterrows():
+            participant_id: str = row["participant_id"]
+            bids_session_id: str = row["bids_session_id"]
+            data_dir: Path = Path(row["target_dir"])
+            command: list[str] = ["dcm2bids", "-d", str(data_dir), "-p", participant_id, "-s", bids_session_id, "-c", str(self.config), "-o", str(self.bids_root)]
+            if skip_dcm2niix:
+                command.append("--skip_dcm2niix")
+            if auto_extract_entities:
+                command.append("--auto_extract_entities")
+            self.cmds.append(command)
+        
+        # for migration in data_migrations.data_migrations:
+        #     participant_id: str = migration.participant_id
+        #     bids_session_id: str = migration.bids_session_id
+        #     data_dir: Path = migration.target_dir
+        #     command: list[str] = ["dcm2bids", "-d", str(data_dir), "-p", participant_id, "-s", bids_session_id, "-c", str(self.config), "-o", str(self.bids_root)]
+        #     if skip_dcm2niix:
+        #         command.append("--skip_dcm2niix")
+        #     if auto_extract_entities:
+        #         command.append("--auto_extract_entities")
+        #     self.cmds.append(command)
+
     def save_cmds(self, output_file: str | PosixPath) -> None:
         """
         Save the dcm2bids commands to a file.
@@ -295,11 +386,16 @@ class DICOMToBIDSConvertor(BaseModel):
                 f.write(" ".join(cmd) + "\n")
         print(f"Saved dcm2bids commands to {output_file}")
         
-    def convert2bids(self) -> None:
+    def convert2bids_parallel(self) -> None:
         """
-        Convert DICOM data to BIDS format for all participants.
+        Convert DICOM data to BIDS format for all participants in parallel.
         """
-        # with multiprocessing.Pool() as pool:
-        #     pool.starmap(self.convert2bids_per_participant, [(participant.participant_id, session_info.bids_session_id) for participant in self.participants for session_info in participant.sessions])
         with multiprocessing.Pool() as pool:
             pool.map(subprocess.run, self.cmds)
+            
+    def convert2bids_sequential(self) -> None:
+        """
+        Convert DICOM data to BIDS format for all participants sequentially.
+        """
+        for cmd in track(self.cmds, description="Converting DICOM data to BIDS format"):
+            subprocess.run(cmd, check=False)
