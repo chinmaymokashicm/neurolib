@@ -2,9 +2,10 @@
 Subject -1:N-> Session -1:N-> Series -1:N-> Scan
 """
 import re
-from typing import Optional, Self, Any
+from typing import Optional, Self, Any, Sequence
 from pathlib import Path
 from datetime import date
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 
 from pydantic import BaseModel, Field
 import pandas as pd
@@ -88,22 +89,36 @@ class ScanField(BaseModel):
     description: Optional[str] = None
     value: Optional[Any] = None
 
-class Scan(BaseModel):
-    name: str
-    scan_fields: list[ScanField] = Field(default_factory=list)
+# class Scan(BaseModel):
+#     name: str
+#     scan_fields: list[ScanField] = Field(default_factory=list)
     
-    @classmethod
-    def from_dicom_file(cls, dicom_path: Path | str, name: Optional[str] = None) -> Self:
-        dicom_path = Path(dicom_path)
-        dicom_data = dicom.dcmread(dicom_path)
-        scan_fields = [ScanField(variable_name=tag, dicom_tag=tag, value=getattr(dicom_data, tag, None)) for tag in DICOM_TAGS]
-        return cls(name=name if name is not None else dicom_path.stem, scan_fields=scan_fields)
+#     @classmethod
+#     def from_dicom_file(cls, dicom_path: Path | str, name: Optional[str] = None) -> Self:
+#         dicom_path = Path(dicom_path)
+#         dicom_data = dicom.dcmread(dicom_path)
+#         scan_fields = [ScanField(variable_name=tag, dicom_tag=tag, value=getattr(dicom_data, tag, None)) for tag in DICOM_TAGS]
+#         return cls(name=name if name is not None else dicom_path.stem, scan_fields=scan_fields)
     
 class Series(BaseModel):
     name: str
-    scans: list[Scan] = Field(default_factory=list)
+    # scans: list[Scan] = Field(default_factory=list)
+    n_scans: int
     series_description: Optional[str] = None
     series_date: Optional[date] = None
+    
+    @classmethod
+    def from_dicom_series(cls, dicom_series: Sequence[Path | str], name: Optional[str] = None) -> Self:
+        # Extract series-level metadata from the first DICOM file in the series, and count the number of scans in the series
+        if len(dicom_series) == 0:
+            raise ValueError("DICOM series must contain at least one DICOM file.")
+        dicom_data = dicom.dcmread(dicom_series[0])
+        series_description = getattr(dicom_data, "SeriesDescription", None)
+        series_date = getattr(dicom_data, "StudyDate", None)
+        if series_date is not None:
+            series_date = pd.to_datetime(series_date, format='%Y%m%d', errors='coerce').date()
+        n_scans = len(dicom_series)
+        return cls(name=name if name is not None else Path(dicom_series[0]).parent.name, n_scans=n_scans, series_description=series_description, series_date=series_date)
     
 class Session(BaseModel):
     name: str
@@ -131,9 +146,7 @@ class Subjects(BaseModel):
             for session in subject.sessions:
                 output.append(f"  Session: {session.name} (Date: {session.study_date})")
                 for series in session.series:
-                    output.append(f"    Series: {series.name} (Description: {series.series_description})")
-                    for scan in series.scans:
-                        output.append(f"      Scan: {scan.name}")
+                    output.append(f"    Series: {series.name} (Description: {series.series_description}) - {series.n_scans} scans)")
         return "\n".join(output)
     
     @classmethod
@@ -191,12 +204,12 @@ class Subjects(BaseModel):
             else:
                 mrn = None
             series_list: list[Series] = []
-            series: list[tuple[str, Path]] = [(subdir.name, subdir) for subdir in (session_path / series_subdir_pattern).iterdir() if subdir.is_dir()]
-            for series_id, series_path in series:
+            series_dirs: list[tuple[str, Path]] = [(subdir.name, subdir) for subdir in (session_path / series_subdir_pattern).iterdir() if subdir.is_dir()]
+            for series_id, series_path in series_dirs:
                 dicoms: list[Path] = [dicom for dicom in (series_path / dicom_subdir_pattern).iterdir() if dicom.is_file()]
                 if len(dicoms) == 0:
                     continue
-                series_list.append(Series(name=series_id, scans=[Scan.from_dicom_file(dicom_path=dicom) for dicom in dicoms] if load_dicom_fields else [Scan(name=dicom.name) for dicom in dicoms]))
+                series_list.append(Series.from_dicom_series(dicoms, name=series_id) if load_dicom_fields else Series(name=series_id, n_scans=len(dicoms)))
             if len(series_list) == 0:
                 continue
             session = Session(name=session_id, series=series_list, study_date=mrn_crosswalk.get_study_date(subject_id) if mrn_crosswalk is not None else None)
@@ -273,7 +286,7 @@ class Subjects(BaseModel):
                     dicoms: list[Path] = [dicom for dicom in (series_path / dicom_subdir_pattern).iterdir() if dicom.is_file()]
                     if len(dicoms) == 0:
                         continue
-                    series_list.append(Series(name=series_id, scans=[Scan.from_dicom_file(dicom_path=dicom) for dicom in dicoms] if load_dicom_fields else [Scan(name=dicom.name) for dicom in dicoms]))
+                    series_list.append(Series(name=series_id, n_scans=len(dicoms)))
                 if len(series_list) == 0:
                     continue
                 session = Session(name=session_id, series=series_list, study_date=mrn_crosswalk.get_study_date(subject_id) if mrn_crosswalk is not None else None)
@@ -287,17 +300,17 @@ class Subjects(BaseModel):
         
     @classmethod
     def from_csv(cls, csv_path: Path | str) -> Self:
-        df = pd.read_csv(csv_path, dtype=str)
+        df = pd.read_csv(csv_path)
         subjects_dict: dict[str, Subject] = {}
         for _, row in df.iterrows():
             subject_name = row['subject_name']
             mrn = row['mrn']
             session_name = row['session_name']
-            study_date = row['study_date']
+            study_date = pd.to_datetime(row['study_date'], errors='coerce').date() if not pd.isna(row['study_date']) else None
             series_name = row['series_name']
-            series_description = row['series_description']
-            scan_name = row['scan_name']
-            scan_fields = [ScanField(variable_name=col, dicom_tag=col, value=row[col]) for col in df.columns if col not in ['subject_name', 'mrn', 'session_name', 'study_date', 'series_name', 'series_description', 'scan_name']]
+            series_description = row['series_description'] if not pd.isna(row['series_description']) else None
+            series_date = pd.to_datetime(row['series_date'], errors='coerce').date() if not pd.isna(row['series_date']) else None
+            n_scans = int(row['n_scans'])
             
             if subject_name not in subjects_dict:
                 subjects_dict[subject_name] = Subject(name=subject_name, mrn=mrn, sessions=[])
@@ -308,36 +321,29 @@ class Subjects(BaseModel):
                 session = Session(name=session_name, series=[], study_date=study_date)
                 subject.sessions.append(session)
             
-            series = next((s for s in session.series if s.name == series_name), None)
-            if series is None:
-                series = Series(name=series_name, scans=[], series_description=series_description)
-                session.series.append(series)
-            
-            scan = Scan(name=scan_name, scan_fields=scan_fields)
-            series.scans.append(scan)
+            series = Series(name=series_name, n_scans=n_scans, series_description=series_description, series_date=series_date)
+            session.series.append(series)
         
         return cls(subjects=list(subjects_dict.values()))
     
-    def to_csv(self, output_path: Path | str) -> None:
+    def to_csv(self, csv_path: Path | str) -> None:
         rows = []
         for subject in self.subjects:
             for session in subject.sessions:
                 for series in session.series:
-                    for scan in series.scans:
-                        row = {
-                            "subject_name": subject.name,
-                            "mrn": subject.mrn,
-                            "session_name": session.name,
-                            "study_date": session.study_date,
-                            "series_name": series.name,
-                            "series_description": series.series_description,
-                            "scan_name": scan.name
-                        }
-                        for field in scan.scan_fields:
-                            row[field.variable_name] = field.value
-                        rows.append(row)
+                    row = {
+                        "subject_name": subject.name,
+                        "mrn": subject.mrn,
+                        "session_name": session.name,
+                        "study_date": session.study_date,
+                        "series_name": series.name,
+                        "series_description": series.series_description,
+                        "series_date": series.series_date,
+                        "n_scans": series.n_scans
+                    }
+                    rows.append(row)
         df = pd.DataFrame(rows)
-        df.to_csv(output_path, index=False)
+        df.to_csv(csv_path, index=False)
 
     def add_subject(self, subject: Subject) -> None:
         self.subjects.append(subject)
