@@ -125,19 +125,21 @@ class Session(BaseModel):
     series: list[Series] = Field(default_factory=list)
     study_date: Optional[date] = None
     
-class Subject(BaseModel):
+    def iterate(self):
+        for series in self.series:
+            yield series
+    
+class MRSubject(BaseModel):
     mrn: Optional[str] = None
     name: str
     sessions: list[Session] = Field(default_factory=list)
     
-class Subjects(BaseModel):
-    subjects: list[Subject] = Field(default_factory=list)
+    def iterate(self):
+        for session in self.sessions:
+            yield session
     
-    def __getitem__(self, subject_name: str) -> Optional[Subject]:
-        for subject in self.subjects:
-            if subject.name == subject_name:
-                return subject
-        return None
+class MRSubjects(BaseModel):
+    subjects: list[MRSubject] = Field(default_factory=list)
     
     def __str__(self) -> str:
         output = []
@@ -148,6 +150,22 @@ class Subjects(BaseModel):
                 for series in session.series:
                     output.append(f"    Series: {series.name} (Description: {series.series_description}) - {series.n_scans} scans)")
         return "\n".join(output)
+    
+    def __getitem__(self, subject_name: str) -> Optional[MRSubject]:
+        for subject in self.subjects:
+            if subject.name == subject_name:
+                return subject
+        return None
+    
+    def iterate(self):
+        for subject in self.subjects:
+            yield subject
+    
+    def get_subject_by_mrn(self, mrn: str) -> Optional[MRSubject]:
+        for subject in self.subjects:
+            if subject.mrn == mrn:
+                return subject
+        return None
     
     @classmethod
     def from_flat_sessions_dicom_dir(
@@ -189,7 +207,7 @@ class Subjects(BaseModel):
             raise ValueError("MRN crosswalk is required for filtering by MRN, but no mapping was found.")
         
         # Identify each subdirectory in the root as a session if it is in the pattern of XXXX-XXXX-XXXX-XXXX
-        subjects_list: list[Subject] = []
+        subjects_list: list[MRSubject] = []
         sessions_list: list[Session] = []
         sessions: list[tuple[str, Path]] = [(subdir.name, subdir) for subdir in dicom_root.iterdir() if subdir.is_dir() and re.match(r'^\d{4}-\d{4}-\d{4}-\d{4}$', subdir.name)]
         if sample is not None:
@@ -217,7 +235,7 @@ class Subjects(BaseModel):
             # Check if subject already exists in subjects_list
             subject = next((s for s in subjects_list if s.name == subject_id), None)
             if subject is None:
-                subject = Subject(name=subject_id, mrn=mrn, sessions=[session])
+                subject = MRSubject(name=subject_id, mrn=mrn, sessions=[session])
                 subjects_list.append(subject)
             else:
                 subject.sessions.append(session)
@@ -266,7 +284,7 @@ class Subjects(BaseModel):
         if filter_by_mrn and mrn_crosswalk is None:
             raise ValueError("MRN crosswalk is required for filtering by MRN, but no mapping was found.")
         
-        subjects_list: list[Subject] = []
+        subjects_list: list[MRSubject] = []
         subject_dirs: list[tuple[str, Path]] = [(subdir.name, subdir) for subdir in dicom_root.iterdir() if subdir.is_dir()]
         if sample is not None:
             subject_dirs = subject_dirs[:sample]
@@ -293,15 +311,15 @@ class Subjects(BaseModel):
                 sessions_list.append(session)
             if len(sessions_list) == 0:
                 continue
-            subject = Subject(name=subject_id, mrn=mrn, sessions=sessions_list)
+            subject = MRSubject(name=subject_id, mrn=mrn, sessions=sessions_list)
             subjects_list.append(subject)
         subjects.subjects = subjects_list
         return subjects
         
     @classmethod
     def from_csv(cls, csv_path: Path | str) -> Self:
-        df = pd.read_csv(csv_path)
-        subjects_dict: dict[str, Subject] = {}
+        df = pd.read_csv(csv_path, dtype=str)
+        subjects_dict: dict[str, MRSubject] = {}
         for _, row in df.iterrows():
             subject_name = row['subject_name']
             mrn = row['mrn']
@@ -313,7 +331,7 @@ class Subjects(BaseModel):
             n_scans = int(row['n_scans'])
             
             if subject_name not in subjects_dict:
-                subjects_dict[subject_name] = Subject(name=subject_name, mrn=mrn, sessions=[])
+                subjects_dict[subject_name] = MRSubject(name=subject_name, mrn=mrn, sessions=[])
             subject = subjects_dict[subject_name]
             
             session = next((s for s in subject.sessions if s.name == session_name), None)
@@ -345,7 +363,7 @@ class Subjects(BaseModel):
         df = pd.DataFrame(rows)
         df.to_csv(csv_path, index=False)
 
-    def add_subject(self, subject: Subject) -> None:
+    def add_subject(self, subject: MRSubject) -> None:
         self.subjects.append(subject)
     
     def remove_subject(self, subject_name: str) -> None:
