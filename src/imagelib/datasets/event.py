@@ -41,9 +41,10 @@ class Events(BaseModel):
         return "\n".join(output)
     
     @classmethod
-    def from_csv(cls, csv_path: str, date_colname: str = "date", subject_colname: Optional[str] = None, mrn_colname: Optional[str] = None, session_colname: Optional[str] = None, event_name_colname: Optional[str] = None, read_file_kwargs: Optional[dict] = None) -> Self:
+    def from_csv(cls, csv_path: str | Path, date_colname: str = "date", subject_colname: Optional[str] = None, mrn_colname: Optional[str] = None, session_colname: Optional[str] = None, event_name_colname: Optional[str] = None, read_file_kwargs: Optional[dict] = None) -> Self:
         if read_file_kwargs is None:
             read_file_kwargs = {}
+        csv_path = Path(csv_path)
         df = pd.read_csv(csv_path, **read_file_kwargs)
         # Convert NaN to None
         df = df.where(pd.notnull(df), None)
