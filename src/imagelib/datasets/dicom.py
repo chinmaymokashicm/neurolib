@@ -138,7 +138,14 @@ class Series(BaseModel):
             raise ValueError("DICOM series must contain at least one DICOM file.")
         dicom_data = dicom.dcmread(dicom_series[0])
         series_description = getattr(dicom_data, "SeriesDescription", None)
-        series_date = getattr(dicom_data, "StudyDate", None)
+        # series_date = getattr(dicom_data, "StudyDate", None)
+        date_tags = ['SeriesDate', 'AcquisitionDate', 'StudyDate', 'ContentDate']
+        series_date = None
+        for tag in date_tags:
+            series_date = getattr(dicom_data, tag, None)
+            if series_date is not None:
+                break
+        
         if series_date is not None:
             series_date = pd.to_datetime(series_date, format='%Y%m%d', errors='coerce').date()
         n_scans = len(dicom_series)
@@ -161,37 +168,6 @@ class Session(BaseModel):
     study_time: Optional[str] = None
     accession_number: Optional[str] = None
     institution_name: Optional[str] = None
-    
-    @classmethod
-    def from_dicom_session(cls, dicom_session: Sequence[Path | str], name: Optional[str] = None) -> Self:
-        # Extract session-level metadata from the first DICOM file in the session, and identify the series within the session
-        if len(dicom_session) == 0:
-            raise ValueError("DICOM session must contain at least one DICOM file.")
-        dicom_data = dicom.dcmread(dicom_session[0])
-        study_date = getattr(dicom_data, "StudyDate", None)
-        if study_date is not None:
-            study_date = pd.to_datetime(study_date, format='%Y%m%d', errors='coerce').date()
-        study_time = getattr(dicom_data, "StudyTime", None)
-        accession_number = getattr(dicom_data, "AccessionNumber", None)
-        institution_name = getattr(dicom_data, "InstitutionName", None)
-        # Identify series within the session by grouping DICOM files by SeriesInstanceUID
-        series_dict: dict[str, list[Path]] = {}
-        for dicom_file in dicom_session:
-            dicom_data = dicom.dcmread(dicom_file)
-            series_uid = getattr(dicom_data, "SeriesInstanceUID", None)
-            if series_uid is not None:
-                if series_uid not in series_dict:
-                    series_dict[series_uid] = []
-                series_dict[series_uid].append(Path(dicom_file))
-        series_list = [Series.from_dicom_series(series_files, name=series_uid) for series_uid, series_files in series_dict.items()]
-        return cls(
-            name=name if name is not None else Path(dicom_session[0]).parent.name,
-            series=series_list,
-            study_date=study_date,
-            study_time=study_time,
-            accession_number=accession_number,
-            institution_name=institution_name
-        )
     
     def iterate(self):
         for series in self.series:
