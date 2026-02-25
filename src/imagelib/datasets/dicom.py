@@ -220,7 +220,6 @@ class MRSubjects(BaseModel):
         mrn_crosswalk_path: Optional[Path | str] = None,
         filter_by_mrn: bool = True,
         sample: Optional[int] = None,
-        load_dicom_fields: bool = False
     ) -> Self:
         """
         Assumes a directory structure of:
