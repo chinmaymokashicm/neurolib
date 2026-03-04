@@ -154,11 +154,14 @@ class PatientTimeline(BaseModel):
                 filtered_entries.append(entry)
         return PatientTimeline(entries=filtered_entries)
     
-    def get_timeline_summary_for_subject(self, subject_id: str) -> str:
+    def get_timeline_summary_for_subject(self, subject_id: str, mrn: Optional[str] = None) -> str:
         patient_entries = self.get_timeline_for_subject(subject_id)
         patient_entries.sort(key=lambda x: x.entry_date)
         start_date = patient_entries[0].entry_date if patient_entries else None
-        output = [f"Timeline for Subject {subject_id}:"]
+        output = [f"Timeline for Subject {subject_id}"]
+        if mrn:
+            output[0] += f" | MRN {mrn}"
+        output[0] += f" | Total entries: {len(patient_entries)} | Entry types: {', '.join(self.types)}"
         for entry in patient_entries:
             current_date = entry.entry_date
             days_since_start = (current_date - start_date).days if start_date else "N/A"
