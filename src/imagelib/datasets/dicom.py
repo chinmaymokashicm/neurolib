@@ -4,7 +4,7 @@ Subject -1:N-> Session -1:N-> Series -1:N-> Scan
 import re
 from typing import Optional, Self, Any, Sequence
 from pathlib import Path
-from datetime import date
+from datetime import date, datetime
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 
 from pydantic import BaseModel, Field
@@ -12,9 +12,17 @@ import pandas as pd
 from rich.progress import track
 import pydicom as dicom
 
-DICOM_TAGS: list[str] = [
+DICOM_TAGS: list[str | int | tuple[int, int]] = [
     "StudyDate",
+    "StudyTime",
+    "SeriesDate",
+    "SeriesTime",
+    "AcquisitionDate",
     "AcquisitionTime",
+    "AcquisitionDateTime",
+    "AccessionNumber",
+    "InstitutionName",
+    "SeriesInstanceUID",
     "SeriesDescription",
     "SeriesNumber",
     "ProtocolName",
@@ -41,6 +49,10 @@ DICOM_TAGS: list[str] = [
     "PatientWeight",
     "BodyPartExamined",
     "ScanningSequence",
+    0x00211060,
+    0x0019109D
+    # (0x0021, 0x1060),
+    # (0x0019, 0x109D),
 ]
 
 class MRNCrosswalkEntry(BaseModel):
@@ -83,24 +95,28 @@ class MRNCrosswalk(BaseModel):
                 return entry.study_date
         return None
 
-def read_dicom_header(path: Path):
-    return dicom.dcmread(
-        path,
-        stop_before_pixels=True,
-        specific_tags=[
-            "SeriesInstanceUID",
-            "SeriesDescription",
-            "StudyDate",
-            "StudyTime",
-            "AcquisitionTime",
-            "AccessionNumber",
-            "InstitutionName",
-            "ProtocolName",
-            "SliceThickness",
-            "PixelSpacing",
-        ],
-        force=True,
-    )
+# def read_dicom_header(path: Path):
+#     return dicom.dcmread(
+#         path,
+#         stop_before_pixels=True,
+#         specific_tags=[
+#             "SeriesInstanceUID",
+#             "SeriesDescription",
+#             "StudyDate",
+#             "StudyTime",
+#             "SeriesDate",
+#             "SeriesTime",
+#             "AcquisitionDate",
+#             "AcquisitionTime",
+#             "AcquisitionDateTime",
+#             "AccessionNumber",
+#             "InstitutionName",
+#             "ProtocolName",
+#             "SliceThickness",
+#             "PixelSpacing",
+#         ],
+#         force=True,
+#     )
 
 class ScanField(BaseModel):
     variable_name: str
@@ -125,40 +141,112 @@ class Series(BaseModel):
     n_scans: int
     series_uid: Optional[str] = None
     series_description: Optional[str] = None
+    study_date: Optional[date] = None
     series_date: Optional[date] = None
     series_time: Optional[str] = None
     protocol_name: Optional[str] = None
     slice_thickness: Optional[float] = None
-    pixel_spacing: Optional[Sequence[float]] = None
+    pixel_spacing: Optional[list[float]] = None
+    institution_name: Optional[str] = None
+    accession_number: Optional[str] = None
+    
+    @staticmethod
+    def _parse_dicom_da(value: Any) -> Optional[date]:
+        if value is None:
+            return None
+        s = str(value).strip()
+        if not s:
+            return None
+        try:
+            return datetime.strptime(s[:8], "%Y%m%d").date()
+        except ValueError:
+            return None
+    
+    @staticmethod
+    def extract_dicom_metadata(dicom_path: Path) -> Optional[dict]:
+        try:
+            dicom_data = dicom.dcmread(
+                dicom_path,
+                stop_before_pixels=True,
+                # specific_tags=DICOM_TAGS,
+                force=True,
+            )
+            metadata = {}
+            for tag in DICOM_TAGS:
+                if isinstance(tag, str):
+                    metadata[tag] = getattr(dicom_data, tag, None)
+                else:
+                    data = dicom_data.get(tag, None)
+                    if data is not None:
+                        metadata[tag] = data.value
+        except Exception:
+            return None
+        return metadata
+        
+    @staticmethod
+    def resolve_study_date(metadata: dict) -> Optional[date]:
+        """
+        Study date can be stored in different DICOM tags depending on the scanner and acquisition protocol, 
+        so we check multiple tags to try to resolve the study date.
+        """
+        date_tags = [0x00211060, 0x0019109D, "AcquisitionDateTime", "AcquisitionDate", "StudyDate", "SeriesDate"]
+        for tag in date_tags:
+            if isinstance(tag, str):
+                date_str = metadata.get(tag, None)
+            else:
+                data = metadata.get(tag, None)
+                if data is None:
+                    continue
+                date_str = data if isinstance(data, str) else getattr(data, 'value', None)
+            if date_str is not None:
+                try:
+                    if isinstance(date_str, str):
+                        date_str = date_str.split(".")[0]  # Remove any fractional seconds if present
+                        resolved_date = pd.to_datetime(date_str, errors='coerce').date()
+                        if pd.notnull(resolved_date):
+                            return resolved_date
+                except Exception:
+                    continue
+        return None
     
     @classmethod
     def from_dicom_series(cls, dicom_series: Sequence[Path | str], name: Optional[str] = None) -> Self:
         # Extract series-level metadata from the first DICOM file in the series, and count the number of scans in the series
         if len(dicom_series) == 0:
             raise ValueError("DICOM series must contain at least one DICOM file.")
-        dicom_data = dicom.dcmread(dicom_series[0])
-        series_description = getattr(dicom_data, "SeriesDescription", None)
-        # series_date = getattr(dicom_data, "StudyDate", None)
-        date_tags = ['SeriesDate', 'AcquisitionDate', 'StudyDate', 'ContentDate']
-        series_date = None
-        for tag in date_tags:
-            series_date = getattr(dicom_data, tag, None)
-            if series_date is not None:
+        for dicom_series_path in dicom_series:
+            dicom_data = cls.extract_dicom_metadata(Path(dicom_series_path))
+            if dicom_data is not None:
                 break
-        
-        if series_date is not None:
-            series_date = pd.to_datetime(series_date, format='%Y%m%d', errors='coerce').date()
+        else:
+            raise ValueError("Could not read metadata from any DICOM files in the series.")
         n_scans = len(dicom_series)
+        series_description = dicom_data.get("SeriesDescription", None)
+        study_date = cls.resolve_study_date(dicom_data)
+        series_date = cls._parse_dicom_da(dicom_data.get("SeriesDate", None))
+        series_time = dicom_data.get("AcquisitionTime", None)
+        protocol_name = dicom_data.get("ProtocolName", None)
+        slice_thickness_raw = dicom_data.get("SliceThickness", None)
+        slice_thickness = float(slice_thickness_raw) if slice_thickness_raw is not None else None
+        pixel_spacing_raw = dicom_data.get("PixelSpacing", None)
+        pixel_spacing = [float(ps) for ps in pixel_spacing_raw] if pixel_spacing_raw is not None else None
+        series_uid = dicom_data.get("SeriesInstanceUID", None)
+        institution_name = dicom_data.get("InstitutionName", None)
+        accession_number = dicom_data.get("AccessionNumber", None)
+        
         return cls(
-            name=name if name is not None else Path(dicom_series[0]).parent.name,
+            name=name if name is not None else series_description if series_description is not None else series_uid if series_uid is not None else "Series",
             n_scans=n_scans,
-            series_uid=getattr(dicom_data, "SeriesInstanceUID", None),
+            series_uid=series_uid,
             series_description=series_description,
+            study_date=study_date,
             series_date=series_date,
-            series_time=getattr(dicom_data, "AcquisitionTime", None),
-            protocol_name=getattr(dicom_data, "ProtocolName", None),
-            slice_thickness=getattr(dicom_data, "SliceThickness", None),
-            pixel_spacing=getattr(dicom_data, "PixelSpacing", None)
+            series_time=series_time,
+            protocol_name=protocol_name,
+            slice_thickness=slice_thickness,
+            pixel_spacing=pixel_spacing,
+            institution_name=institution_name,
+            accession_number=accession_number,
         )
     
 class Session(BaseModel):
@@ -168,6 +256,34 @@ class Session(BaseModel):
     study_time: Optional[str] = None
     accession_number: Optional[str] = None
     institution_name: Optional[str] = None
+    
+    @classmethod
+    def from_series(cls, series_list: list[Series], name: Optional[str] = None) -> Self:
+        if len(series_list) == 0:
+            raise ValueError("Session must contain at least one series.")
+        study_date = None
+        study_time = None
+        accession_number = None
+        institution_name = None
+        for series in series_list:
+            if series.study_date is not None and study_date is None:
+                study_date = series.study_date
+            if series.series_time is not None and study_time is None:
+                study_time = series.series_time
+            if series.accession_number is not None and accession_number is None:
+                accession_number = series.accession_number
+            if series.institution_name is not None and institution_name is None:
+                institution_name = series.institution_name
+            if all(item is not None for item in [study_date, study_time, accession_number, institution_name]):
+                break
+        return cls(
+            name=name if name is not None else f"Session_{study_date.isoformat()}" if study_date is not None else "Session",
+            series=series_list,
+            study_date=study_date,
+            study_time=study_time,
+            accession_number=accession_number,
+            institution_name=institution_name,
+        )
     
     def iterate(self):
         for series in self.series:
@@ -240,8 +356,6 @@ class MRSubjects(BaseModel):
         """
         dicom_root = Path(dicom_root)
         
-        subjects: Self = cls()
-        
         # Use the crosswalk to map subject ID with MRN and keep only those subjects going forward if filter_by_mrn is True
         mrn_crosswalk = None
         if mrn_crosswalk_path is not None:
@@ -250,91 +364,51 @@ class MRSubjects(BaseModel):
             raise ValueError("MRN crosswalk is required for filtering by MRN, but no mapping was found.")
         
         # Identify each subdirectory in the root as a session if it is in the pattern of XXXX-XXXX-XXXX-XXXX (be liberal with the last set of digits - there could be additional characters there that we want to ignore, but we want to make sure we capture the first 16 digits which represent subject ID and session ID)
-        subjects_list: list[MRSubject] = []
-        sessions_list: list[Session] = []
-        sessions: list[tuple[str, Path]] = [(subdir.name, subdir) for subdir in dicom_root.iterdir() if subdir.is_dir() and re.match(r'^\d{4}-\d{4}-\d{4}-\d{4}', subdir.name)]
+        subjects_dict: dict[str, list[Path]] = {}
+        subjects: list[MRSubject] = []
+        for session_dir in dicom_root.iterdir():
+            if not session_dir.is_dir() or not re.match(r"^\d{4}-\d{4}-\d{4}-\d{4}.*", session_dir.name):
+                continue
+            subject_id = "-".join(session_dir.name.split("-")[:2])  # Capture the first 19 characters to include the full subject ID and session ID (16 characters + 3 dashes)
+            if subject_id not in subjects_dict:
+                subjects_dict[subject_id] = []
+            subjects_dict[subject_id].append(session_dir)
         if sample is not None:
-            sessions = sessions[:sample]
-        for session_id, session_path in track(sessions, description="Processing sessions..."):
-            # Extract subject ID from session ID (XXXX-XXXX is the subject ID)
-            subject_id = '-'.join(session_id.split('-')[:2])
+            subjects_dict = dict(list(subjects_dict.items())[:sample])
+        for subject_id, session_dirs in track(subjects_dict.items(), description="Processing sessions...", total=len(subjects_dict)):
+            sessions = []
             if filter_by_mrn:
                 mrn = mrn_crosswalk.get_mrn(subject_id) if mrn_crosswalk is not None else None
                 if mrn is None:
                     continue
             else:
                 mrn = None
-            
-            series_list: list[Series] = []
-            series_dirs: list[tuple[str, Path]] = [(subdir.name, subdir) for subdir in (session_path / series_subdir_pattern).iterdir() if subdir.is_dir()]
-            for series_name, series_path in series_dirs:
-                # Identify DICOM files inside the series directory
-                dicom_dir = series_path / dicom_subdir_pattern
-                if not dicom_dir.exists():
+            for session_dir in session_dirs:
+                series_path = session_dir / series_subdir_pattern
+                if not series_path.exists():
                     continue
-
-                dicom_files = [
-                    p for p in dicom_dir.iterdir()
-                    if p.is_file()
-                ]
-
-                if len(dicom_files) == 0:
+                series_dirs = [d for d in series_path.iterdir() if d.is_dir()]
+                series_list = []
+                for series_dir in series_dirs:
+                    dicom_files = list((series_dir / dicom_subdir_pattern).rglob("*.dcm"))
+                    if len(dicom_files) == 0:
+                        continue
+                    try:
+                        series_obj = Series.from_dicom_series(dicom_series=dicom_files, name=series_dir.name)
+                        series_list.append(series_obj)
+                    except Exception as e:
+                        # print(f"Failed to create Series object from DICOM files in {series_dir}, skipping... Error: {e}")
+                        raise e
+                        continue
+                if len(series_list) == 0:
                     continue
-
-                try:
-                    series = Series.from_dicom_series(
-                        dicom_series=dicom_files,
-                        name=series_name
-                    )
-                    series_list.append(series)
-                except Exception:
-                    # Skip malformed series rather than crashing entire ingestion
-                    continue
-
-            # Skip empty sessions
-            if len(series_list) == 0:
+                session_obj = Session.from_series(series_list=series_list, name=session_dir.name)
+                sessions.append(session_obj)
+            if len(sessions) == 0:
                 continue
-
-            # Extract session-level metadata from first DICOM file of first series
-            first_series = series_list[0]
-            first_series_path = series_dirs[0][1]
-            first_dicom_dir = first_series_path / dicom_subdir_pattern
-            first_dicom_files = [
-                p for p in first_dicom_dir.iterdir()
-                if p.is_file()
-            ]
-
-            if len(first_dicom_files) == 0:
-                continue
-
-            dicom_data = dicom.dcmread(first_dicom_files[0])
-
-            study_date = getattr(dicom_data, "StudyDate", None)
-            if study_date is not None:
-                study_date = pd.to_datetime(
-                    study_date,
-                    format='%Y%m%d',
-                    errors='coerce'
-                ).date()
-
-            session = Session(
-                name=session_id,
-                series=series_list,
-                study_date=study_date,
-                study_time=getattr(dicom_data, "StudyTime", None),
-                accession_number=getattr(dicom_data, "AccessionNumber", None),
-                institution_name=getattr(dicom_data, "InstitutionName", None)
-            )    
-            
-            # Check if subject already exists in subjects_list
-            subject = next((s for s in subjects_list if s.name == subject_id), None)
-            if subject is None:
-                subject = MRSubject(name=subject_id, mrn=mrn, sessions=[session])
-                subjects_list.append(subject)
-            else:
-                subject.sessions.append(session)
-        subjects.subjects = subjects_list
-        return subjects
+            subject_obj = MRSubject(name=subject_id, mrn=mrn, sessions=sessions)
+            subjects.append(subject_obj)
+        return cls(subjects=subjects)
     
     @classmethod
     def from_nested_dicom_dir(
@@ -367,8 +441,6 @@ class MRSubjects(BaseModel):
         """
         dicom_root = Path(dicom_root)
         
-        subjects: Self = cls()
-        
         # Use the crosswalk to map subject ID with MRN and keep only those subjects going forward if filter_by_mrn is True
         mrn_crosswalk = None
         if mrn_crosswalk_path is not None:
@@ -376,134 +448,92 @@ class MRSubjects(BaseModel):
         if filter_by_mrn and mrn_crosswalk is None:
             raise ValueError("MRN crosswalk is required for filtering by MRN, but no mapping was found.")
         
-        subjects_list: list[MRSubject] = []
-        subject_dirs: list[tuple[str, Path]] = [(subdir.name, subdir) for subdir in dicom_root.iterdir() if subdir.is_dir()]
+        subjects_dict: dict[str, list[Path]] = {}
+        subjects: list[MRSubject] = []
+        for subject_dir in dicom_root.iterdir():
+            if not subject_dir.is_dir():
+                continue
+            subject_id = subject_dir.name
+            if subject_id not in subjects_dict:
+                subjects_dict[subject_id] = []
+            subjects_dict[subject_id].append(subject_dir)
         if sample is not None:
-            subject_dirs = subject_dirs[:sample]
-        for subject_id, subject_path in track(subject_dirs, description="Processing subjects..."):
+            subjects_dict = dict(list(subjects_dict.items())[:sample])
+        for subject_id, subject_dirs in subjects_dict.items():
+            sessions = []
             if filter_by_mrn:
                 mrn = mrn_crosswalk.get_mrn(subject_id) if mrn_crosswalk is not None else None
                 if mrn is None:
                     continue
             else:
                 mrn = None
-            sessions_list: list[Session] = []
-            session_dirs: list[tuple[str, Path]] = [(subdir.name, subdir) for subdir in (subject_path / session_subdir_pattern).iterdir() if subdir.is_dir()]
-            for session_name, session_path in session_dirs:
-                series_list: list[Series] = []
-                series_map: dict = {}
-                header = None
-                series_dirs: list[tuple[str, Path]] = [(subdir.name, subdir) for subdir in (session_path / series_subdir_pattern).iterdir() if subdir.is_dir()]
-                for series_name, series_path in series_dirs:
-                    dicom_dir = series_path / dicom_subdir_pattern
-                    if not dicom_dir.exists():
-                        continue
-
-                    dicom_files = [p for p in dicom_dir.iterdir() if p.is_file()]
-                    if not dicom_files:
-                        continue
-
-                    # Read ONLY first file header
-                    try:
-                        header = read_dicom_header(dicom_files[0])
-                    except Exception:
-                        continue
-
-                    series_uid = getattr(header, "SeriesInstanceUID", None)
-                    if series_uid is None:
-                        continue
-
-                    study_date_value = getattr(header, "StudyDate", None)
-                    series_map[series_uid] = {
-                        "name": series_name,
-                        "n_scans": len(dicom_files),
-                        "series_description": getattr(header, "SeriesDescription", None),
-                        "series_date": pd.to_datetime(
-                            study_date_value,
-                            format="%Y%m%d",
-                            errors="coerce",
-                        ).date() if study_date_value else None,
-                        "series_time": getattr(header, "AcquisitionTime", None),
-                        "protocol_name": getattr(header, "ProtocolName", None),
-                        "slice_thickness": getattr(header, "SliceThickness", None),
-                        "pixel_spacing": getattr(header, "PixelSpacing", None),
-                    }
-
-                if not series_map:
+            for subject_dir in subject_dirs:
+                # session_dirs = [d for d in (subject_dir / session_subdir_pattern).iterdir() if d.is_dir()]
+                session_path = subject_dir / session_subdir_pattern
+                if not session_path.exists():
                     continue
-
-                # Build Series objects without re-reading DICOMs
-                series_list = [
-                    Series(
-                        name=v["name"],
-                        n_scans=v["n_scans"],
-                        series_uid=uid,
-                        series_description=v["series_description"],
-                        series_date=v["series_date"],
-                        series_time=v["series_time"],
-                        protocol_name=v["protocol_name"],
-                        slice_thickness=v["slice_thickness"],
-                        pixel_spacing=v["pixel_spacing"],
-                    )
-                    for uid, v in series_map.items()
-                ]
-
-                # Use first header already read
-                if header is None:
-                    continue
-                first_header = header
-
-                study_date_value = getattr(first_header, "StudyDate", None)
-                study_date = pd.to_datetime(
-                    study_date_value,
-                    format="%Y%m%d",
-                    errors="coerce",
-                ).date() if study_date_value else None
-
-                session = Session(
-                    name=session_name,
-                    series=series_list,
-                    study_date=study_date,
-                    study_time=getattr(first_header, "StudyTime", None),
-                    accession_number=getattr(first_header, "AccessionNumber", None),
-                    institution_name=getattr(first_header, "InstitutionName", None),
-                )
-
-                sessions_list.append(session)
-            if len(sessions_list) == 0:
+                session_dirs = [d for d in session_path.iterdir() if d.is_dir()]
+                for session_dir in session_dirs:
+                    series_path = session_dir / series_subdir_pattern
+                    if not series_path.exists():
+                        continue
+                    series_dirs = [d for d in series_path.iterdir() if d.is_dir()]
+                    series_list = []
+                    for series_dir in series_dirs:
+                        dicom_files = list((series_dir / dicom_subdir_pattern).rglob("*.dcm"))
+                        if len(dicom_files) == 0:
+                            continue
+                        try:
+                            series_obj = Series.from_dicom_series(dicom_series=dicom_files, name=series_dir.name)
+                            series_list.append(series_obj)
+                        except Exception:
+                            continue
+                    if len(series_list) == 0:
+                        continue
+                    session_obj = Session.from_series(series_list=series_list, name=session_dir.name)
+                    sessions.append(session_obj)
+            if len(sessions) == 0:
                 continue
-            subject = MRSubject(name=subject_id, mrn=mrn, sessions=sessions_list)
-            subjects_list.append(subject)
-        subjects.subjects = subjects_list
-        return subjects
+            subject_obj = MRSubject(name=subject_id, mrn=mrn, sessions=sessions)
+            subjects.append(subject_obj)
+        return cls(subjects=subjects)
         
     @classmethod
     def from_csv(cls, csv_path: Path | str) -> Self:
-        df = pd.read_csv(csv_path, dtype=str)
-        subjects_dict: dict[str, MRSubject] = {}
+        df = pd.read_csv(csv_path)
+        subjects_dict: dict[str, list[Session]] = {}
         for _, row in df.iterrows():
             subject_name = row['subject_name']
             mrn = row['mrn']
             session_name = row['session_name']
-            study_date = pd.to_datetime(row['study_date'], errors='coerce').date() if not pd.isna(row['study_date']) else None
+            study_date = pd.to_datetime(row['study_date'], errors='coerce').date() if pd.notnull(row['study_date']) else None
             series_name = row['series_name']
-            series_description = row['series_description'] if not pd.isna(row['series_description']) else None
-            series_date = pd.to_datetime(row['series_date'], errors='coerce').date() if not pd.isna(row['series_date']) else None
-            n_scans = int(row['n_scans'])
+            series_description = row['series_description']
+            series_date = pd.to_datetime(row['series_date'], errors='coerce').date() if pd.notnull(row['series_date']) else None
+            n_scans = int(row['n_scans']) if pd.notnull(row['n_scans']) else 0
             
+            series_obj = Series(
+                name=series_name,
+                n_scans=n_scans,
+                series_description=series_description,
+                study_date=study_date,
+                series_date=series_date,
+            )
+            session_obj = Session(
+                name=session_name,
+                series=[series_obj],
+                study_date=study_date,
+            )
             if subject_name not in subjects_dict:
-                subjects_dict[subject_name] = MRSubject(name=subject_name, mrn=mrn, sessions=[])
-            subject = subjects_dict[subject_name]
-            
-            session = next((s for s in subject.sessions if s.name == session_name), None)
-            if session is None:
-                session = Session(name=session_name, series=[], study_date=study_date)
-                subject.sessions.append(session)
-            
-            series = Series(name=series_name, n_scans=n_scans, series_description=series_description, series_date=series_date)
-            session.series.append(series)
+                subjects_dict[subject_name] = []
+            subjects_dict[subject_name].append(session_obj)
         
-        return cls(subjects=list(subjects_dict.values()))
+        subjects: list[MRSubject] = []
+        for subject_name, sessions in subjects_dict.items():
+            mrn = sessions[0].series[0].accession_number if len(sessions) > 0 and len(sessions[0].series) > 0 else None
+            subject_obj = MRSubject(name=subject_name, mrn=mrn, sessions=sessions)
+            subjects.append(subject_obj)
+        return cls(subjects=subjects)
     
     def to_csv(self, csv_path: Path | str) -> None:
         rows = []
@@ -511,14 +541,14 @@ class MRSubjects(BaseModel):
             for session in subject.sessions:
                 for series in session.series:
                     row = {
-                        "subject_name": subject.name,
-                        "mrn": subject.mrn,
-                        "session_name": session.name,
-                        "study_date": session.study_date,
-                        "series_name": series.name,
-                        "series_description": series.series_description,
-                        "series_date": series.series_date,
-                        "n_scans": series.n_scans
+                        'subject_name': subject.name,
+                        'mrn': subject.mrn,
+                        'session_name': session.name,
+                        'study_date': session.study_date.isoformat() if session.study_date else None,
+                        'series_name': series.name,
+                        'series_description': series.series_description,
+                        'series_date': series.series_date.isoformat() if series.series_date else None,
+                        'n_scans': series.n_scans,
                     }
                     rows.append(row)
         df = pd.DataFrame(rows)

@@ -4,7 +4,7 @@ import json, os
 
 import numpy as np
 
-def flatten_no_compound_key(dictionary: dict):
+def flatten_no_compound_key(dictionary: MutableMapping):
     """
     Flatten a dictionary with no compound keys.
     """
@@ -87,12 +87,13 @@ def get_env_variables(env_vars: dict[str, bool]) -> list[str]:
     return values
 
 
-class NumpyEncoder(json.JSONEncoder):
-    def default(self, obj):
-        if isinstance(obj, dict):
-            return {k: self.default(v) for k, v in obj.items()}
-        if isinstance(obj, list):
-            return [self.default(v) for v in obj]
-        if isinstance(obj, np.ndarray):
-            return obj.tolist()
-        return super().default(obj)
+# class NumpyEncoder(json.JSONEncoder):
+#     def default(self, obj):
+#         if isinstance(obj, dict):
+#             return {k: self.default(v) for k, v in obj.items()}
+#         if isinstance(obj, list):
+#             return [self.default(v) for v in obj]
+#         if isinstance(obj, np.ndarray):
+#             return obj.tolist()
+#         return super().default(obj)
+
