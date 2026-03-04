@@ -501,7 +501,8 @@ class MRSubjects(BaseModel):
     @classmethod
     def from_csv(cls, csv_path: Path | str) -> Self:
         df = pd.read_csv(csv_path)
-        subjects_dict: dict[str, list[Session]] = {}
+        subjects_dict: dict[str, dict[str, list[Series]]] = {}
+        subject_to_mrn: dict[str, str] = {}
         for _, row in df.iterrows():
             subject_name = row['subject_name']
             mrn = row['mrn']
@@ -516,22 +517,22 @@ class MRSubjects(BaseModel):
                 name=series_name,
                 n_scans=n_scans,
                 series_description=series_description,
-                study_date=study_date,
                 series_date=series_date,
-            )
-            session_obj = Session(
-                name=session_name,
-                series=[series_obj],
                 study_date=study_date,
             )
             if subject_name not in subjects_dict:
-                subjects_dict[subject_name] = []
-            subjects_dict[subject_name].append(session_obj)
-        
-        subjects: list[MRSubject] = []
-        for subject_name, sessions in subjects_dict.items():
-            mrn = sessions[0].series[0].accession_number if len(sessions) > 0 and len(sessions[0].series) > 0 else None
-            subject_obj = MRSubject(name=subject_name, mrn=mrn, sessions=sessions)
+                subjects_dict[subject_name] = {}
+            if session_name not in subjects_dict[subject_name]:
+                subjects_dict[subject_name][session_name] = []
+            subjects_dict[subject_name][session_name].append(series_obj)
+            subject_to_mrn[subject_name] = str(mrn)
+        subjects = []
+        for subject_name, sessions_dict in subjects_dict.items():
+            sessions = []
+            for session_name, series_list in sessions_dict.items():
+                session_obj = Session.from_series(series_list=series_list, name=session_name)
+                sessions.append(session_obj)
+            subject_obj = MRSubject(name=subject_name, mrn=subject_to_mrn.get(subject_name, None), sessions=sessions)
             subjects.append(subject_obj)
         return cls(subjects=subjects)
     
