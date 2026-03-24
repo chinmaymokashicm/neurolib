@@ -189,7 +189,7 @@ class Series(BaseModel):
         Study date can be stored in different DICOM tags depending on the scanner and acquisition protocol, 
         so we check multiple tags to try to resolve the study date.
         """
-        date_tags = [0x00211060, 0x0019109D, "AcquisitionDateTime", "AcquisitionDate", "StudyDate", "SeriesDate"]
+        date_tags = [0x00211060, 0x0019109D, 0x00291019, "AcquisitionDateTime", "AcquisitionDate", "StudyDate", "SeriesDate"]
         for tag in date_tags:
             if isinstance(tag, str):
                 date_str = metadata.get(tag, None)
