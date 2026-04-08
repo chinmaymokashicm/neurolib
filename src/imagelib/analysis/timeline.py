@@ -40,18 +40,18 @@ class PatientTimeline(BaseModel):
             output.append(f"Subject {entry.subject_id}, Date: {entry.entry_date}, Type: {entry.entry_type}, Description: {entry.description}")
         return "\n".join(output)
     
-    def __add__(self, other: Self) -> 'PatientTimeline':
+    def __add__(self, other: Self) -> Self:
         if not isinstance(other, PatientTimeline):
             return NotImplemented
         combined_entries = self.entries + other.entries
         combined_entries.sort(key=lambda x: x.entry_date)
-        return PatientTimeline(entries=combined_entries)
+        return self.__class__(entries=combined_entries)
     
-    def __sub__(self, other: Self) -> 'PatientTimeline':
+    def __sub__(self, other: Self) -> Self:
         if not isinstance(other, PatientTimeline):
             return NotImplemented
         remaining_entries = [entry for entry in self.entries if entry not in other.entries]
-        return PatientTimeline(entries=remaining_entries)
+        return self.__class__(entries=remaining_entries)
     
     @property
     def types(self) -> set[str]:
@@ -102,15 +102,32 @@ class PatientTimeline(BaseModel):
     def get_timeline_for_subject(self, subject_id: str) -> list[PatientTimelineEntry]:
         return [entry for entry in self.entries if entry.subject_id == subject_id]
     
-    def filter_timeline_by_date_range(self, start_date: Optional[date] = None, end_date: Optional[date] = None) -> 'PatientTimeline':
+    def filter_timeline_by_date_range(self, start_date: Optional[date] = None, end_date: Optional[date] = None) -> Self:
+        """Filter the timeline to include only entries within the specified date range.
+        
+        Args:
+            start_date (Optional[date]): The start date of the range. Entries before this date will be excluded. If None, no lower bound is applied.
+            end_date (Optional[date]): The end date of the range. Entries after this date will be excluded. If None, no upper bound is applied.
+        
+        Returns:
+            PatientTimeline: A new PatientTimeline containing only entries within the specified date range.
+        """
         filtered_entries = [entry for entry in self.entries if (start_date is None or start_date <= entry.entry_date) and (end_date is None or entry.entry_date <= end_date)]
-        return PatientTimeline(entries=filtered_entries)
+        return self.__class__(entries=filtered_entries)
     
-    def filter_timeline_by_entry_type(self, entry_types: list[str]) -> 'PatientTimeline':
+    def filter_timeline_by_entry_type(self, entry_types: list[str]) -> Self:
+        """Filter the timeline to include only entries of the specified entry types.
+        
+        Args:
+            entry_types (list[str]): A list of entry types to include in the filtered timeline.
+        
+        Returns:
+            PatientTimeline: A new PatientTimeline containing only entries with entry types in the specified list.
+        """
         filtered_entries = [entry for entry in self.entries if entry.entry_type in entry_types]
-        return PatientTimeline(entries=filtered_entries)
+        return self.__class__(entries=filtered_entries)
     
-    def remove_entries_by_event_fields(self, fields: dict[str, Any]) -> 'PatientTimeline':
+    def remove_entries_by_event_fields(self, fields: dict[str, Any]) -> Self:
         """
         Remove timeline entries that match specific event field values. 
         For example, if you want to remove all events where "treatment_type" is "chemotherapy", 
@@ -136,9 +153,9 @@ class PatientTimeline(BaseModel):
                     break
             if not match:
                 filtered_entries.append(entry)
-        return PatientTimeline(entries=filtered_entries)
+        return self.__class__(entries=filtered_entries)
     
-    def filter_timeline_by_event_fields(self, fields: dict[str, Any]) -> 'PatientTimeline':
+    def filter_timeline_by_event_fields(self, fields: dict[str, Any]) -> Self:
         filtered_entries = []
         for entry in self.entries:
             if entry.entry_type != "event":
@@ -152,7 +169,7 @@ class PatientTimeline(BaseModel):
                     break
             if match:
                 filtered_entries.append(entry)
-        return PatientTimeline(entries=filtered_entries)
+        return self.__class__(entries=filtered_entries)
     
     def get_timeline_summary_for_subject(self, subject_id: str, mrn: Optional[str] = None) -> str:
         patient_entries = self.get_timeline_for_subject(subject_id)
