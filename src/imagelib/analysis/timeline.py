@@ -102,8 +102,8 @@ class PatientTimeline(BaseModel):
     def get_timeline_for_subject(self, subject_id: str) -> list[PatientTimelineEntry]:
         return [entry for entry in self.entries if entry.subject_id == subject_id]
     
-    def filter_timeline_by_date_range(self, start_date: date, end_date: date) -> 'PatientTimeline':
-        filtered_entries = [entry for entry in self.entries if start_date <= entry.entry_date <= end_date]
+    def filter_timeline_by_date_range(self, start_date: Optional[date] = None, end_date: Optional[date] = None) -> 'PatientTimeline':
+        filtered_entries = [entry for entry in self.entries if (start_date is None or start_date <= entry.entry_date) and (end_date is None or entry.entry_date <= end_date)]
         return PatientTimeline(entries=filtered_entries)
     
     def filter_timeline_by_entry_type(self, entry_types: list[str]) -> 'PatientTimeline':
