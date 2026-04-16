@@ -303,6 +303,9 @@ class MRSubject(BaseModel):
     def iterate(self):
         for session in self.sessions:
             yield session
+            
+    def remove_session(self, session_name: str) -> None:
+        self.sessions = [session for session in self.sessions if session.name != session_name]
     
 class MRSubjects(BaseModel):
     subjects: list[MRSubject] = Field(default_factory=list)
