@@ -89,6 +89,12 @@ class MRNCrosswalk(BaseModel):
                 return entry.mrn
         return None
     
+    def get_subject_id(self, mrn: str) -> Optional[str]:
+        for entry in self.entries:
+            if entry.mrn == mrn:
+                return entry.subject_id
+        return None
+    
     def get_study_date(self, subject_id: str) -> Optional[date]:
         for entry in self.entries:
             if entry.subject_id == subject_id:
